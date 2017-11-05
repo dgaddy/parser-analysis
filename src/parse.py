@@ -62,6 +62,7 @@ class TopDownParser(object):
             label_hidden_dim,
             split_hidden_dim,
             dropout,
+            lstm_type,
     ):
         self.spec = locals()
         self.spec.pop("self")
@@ -92,12 +93,77 @@ class TopDownParser(object):
 
         self.dropout = dropout
 
+        self.lstm_type = lstm_type
+
     def param_collection(self):
         return self.model
 
     @classmethod
     def from_spec(cls, spec, model):
         return cls(model, **spec)
+
+    def get_basic_span_encoding(self, embeddings):
+        lstm_outputs = self.lstm.transduce(embeddings)
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            forward = (
+                lstm_outputs[right][:self.lstm_dim] -
+                lstm_outputs[left][:self.lstm_dim])
+            backward = (
+                lstm_outputs[left + 1][self.lstm_dim:] -
+                lstm_outputs[right + 1][self.lstm_dim:])
+            return dy.concatenate([forward, backward])
+
+        return span_encoding
+
+    def get_truncated_span_encoding(self, embeddings, distance):
+        padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
+        forward_reps = []
+        backward_reps = []
+        for i in range(len(embeddings)-1):
+            lstm_inputs = padded_embeddings[i:i+distance*2]
+            lstm_outputs = self.lstm.transduce(lstm_inputs)
+            forward_reps.append(lstm_outputs[distance-1][:self.lstm_dim])
+            backward_reps.append(lstm_outputs[distance][self.lstm_dim:])
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            forward = (
+                forward_reps[right] -
+                forward_reps[left])
+            backward = (
+                backward_reps[left] -
+                backward_reps[right])
+            return dy.concatenate([forward, backward])
+
+        return span_encoding
+
+    def get_truncated_span_encoding_batch(self, embeddings, distance):
+        padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
+        batched_embeddings = []
+        for i in range(distance*2):
+            selected = padded_embeddings[i:len(padded_embeddings)-(distance*2)+i+1]
+            catted = dy.concatenate_to_batch(selected)
+            batched_embeddings.append(catted)
+        assert batched_embeddings[0].dim()[1] == len(embeddings)-1 # batch dimension is length of sentence + 1
+
+        lstm_outputs = self.lstm.transduce(batched_embeddings)
+
+        forward_reps = lstm_outputs[distance-1][:self.lstm_dim]
+        backward_reps = lstm_outputs[distance][self.lstm_dim:]
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            forward = (
+                dy.pick_batch_elem(forward_reps, right) -
+                dy.pick_batch_elem(forward_reps, left))
+            backward = (
+                dy.pick_batch_elem(backward_reps, left) -
+                dy.pick_batch_elem(backward_reps, right))
+            return dy.concatenate([forward, backward])
+
+        return span_encoding
 
     def parse(self, sentence, gold=None, explore=True):
         is_train = gold is not None
@@ -117,17 +183,10 @@ class TopDownParser(object):
             word_embedding = self.word_embeddings[self.word_vocab.index(word)]
             embeddings.append(dy.concatenate([tag_embedding, word_embedding]))
 
-        lstm_outputs = self.lstm.transduce(embeddings)
-
-        @functools.lru_cache(maxsize=None)
-        def span_encoding(left, right):
-            forward = (
-                lstm_outputs[right][:self.lstm_dim] -
-                lstm_outputs[left][:self.lstm_dim])
-            backward = (
-                lstm_outputs[left + 1][self.lstm_dim:] -
-                lstm_outputs[right + 1][self.lstm_dim:])
-            return dy.concatenate([forward, backward])
+        if self.lstm_type == 'truncated':
+            span_encoding = self.get_truncated_span_encoding(embeddings, 3)
+        else:
+            span_encoding = self.get_basic_span_encoding(embeddings)
 
         def helper(left, right):
             assert 0 <= left < right <= len(sentence)

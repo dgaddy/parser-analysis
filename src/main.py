@@ -80,6 +80,7 @@ def run_train(args):
 
     print("Initializing model...")
     model = dy.ParameterCollection()
+    print("Input LSTM type:", args.lstm_type)
     parser = parse.TopDownParser(
         model,
         tag_vocab,
@@ -92,6 +93,7 @@ def run_train(args):
         args.label_hidden_dim,
         args.split_hidden_dim,
         args.dropout,
+        args.lstm_type
     )
     trainer = dy.AdamTrainer(model)
 
@@ -250,6 +252,7 @@ def main():
     subparser.add_argument("--epochs", type=int)
     subparser.add_argument("--checks-per-epoch", type=int, default=4)
     subparser.add_argument("--print-vocabs", action="store_true")
+    subparser.add_argument("--lstm-type", choices=["basic","truncated"], default="basic")
 
     subparser = subparsers.add_parser("test")
     subparser.set_defaults(callback=run_test)
