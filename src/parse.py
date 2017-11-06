@@ -78,6 +78,7 @@ class TopDownParser(object):
             dropout,
             lstm_type,
             lstm_context_size,
+            embedding_type,
     ):
         self.spec = locals()
         self.spec.pop("self")
@@ -94,9 +95,17 @@ class TopDownParser(object):
         self.word_embeddings = self.model.add_lookup_parameters(
             (word_vocab.size, word_embedding_dim), name="word-embeddings")
 
+        self.embedding_type = embedding_type
+        if embedding_type == 'both':
+            emb_dim = tag_embedding_dim + word_embedding_dim
+        elif embedding_type == 'word':
+            emb_dim = word_embedding_dim
+        elif embedding_type == 'tag':
+            emb_dim = tag_embedding_dim
+
         self.lstm = dy.BiRNNBuilder(
             lstm_layers,
-            tag_embedding_dim + word_embedding_dim,
+            emb_dim,
             2 * lstm_dim,
             self.model,
             dy.VanillaLSTMBuilder)
@@ -277,7 +286,12 @@ class TopDownParser(object):
                 if not count or (is_train and np.random.rand() < 1 / (1 + count)):
                     word = UNK
             word_embedding = self.word_embeddings[self.word_vocab.index(word)]
-            embeddings.append(dy.concatenate([tag_embedding, word_embedding]))
+            if self.embedding_type == 'both':
+                embeddings.append(dy.concatenate([tag_embedding, word_embedding]))
+            elif self.embedding_type == 'word':
+                embeddings.append(word_embedding)
+            elif self.embedding_type == 'tag':
+                embeddings.append(tag_embedding)
 
         if self.lstm_type == 'truncated':
             span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size)

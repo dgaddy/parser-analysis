@@ -96,7 +96,8 @@ def run_train(args):
         args.split_hidden_dim,
         args.dropout,
         args.lstm_type,
-        args.lstm_context_size
+        args.lstm_context_size,
+        args.embedding_type,
     )
     trainer = dy.AdamTrainer(model)
 
@@ -267,6 +268,7 @@ def main():
     subparser.add_argument("--print-vocabs", action="store_true")
     subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside"], default="basic")
     subparser.add_argument("--lstm-context-size", type=int, default=3)
+    subparser.add_argument("--embedding-type", choices=["word","tag","both"], default="both")
     subparser.add_argument("--random-embeddings", action="store_true")
     subparser.add_argument("--random-lstm", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
