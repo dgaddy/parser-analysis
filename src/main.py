@@ -22,6 +22,8 @@ def format_elapsed(start_time):
     return elapsed_string
 
 def run_train(args):
+    print("Running training with arguments:", args)
+
     if args.numpy_seed is not None:
         print("Setting numpy random seed to {}...".format(args.numpy_seed))
         np.random.seed(args.numpy_seed)
@@ -93,7 +95,8 @@ def run_train(args):
         args.label_hidden_dim,
         args.split_hidden_dim,
         args.dropout,
-        args.lstm_type
+        args.lstm_type,
+        args.lstm_context_size
     )
     trainer = dy.AdamTrainer(model)
 
@@ -252,7 +255,8 @@ def main():
     subparser.add_argument("--epochs", type=int)
     subparser.add_argument("--checks-per-epoch", type=int, default=4)
     subparser.add_argument("--print-vocabs", action="store_true")
-    subparser.add_argument("--lstm-type", choices=["basic","truncated"], default="basic")
+    subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside"], default="basic")
+    subparser.add_argument("--lstm-context-size", type=int, default=3)
 
     subparser = subparsers.add_parser("test")
     subparser.set_defaults(callback=run_test)

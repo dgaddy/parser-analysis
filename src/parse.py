@@ -1,4 +1,5 @@
 import functools
+import random
 
 import dynet as dy
 import numpy as np
@@ -16,6 +17,19 @@ def augment(scores, oracle_index):
     increment = np.ones(shape)
     increment[oracle_index] = 0
     return scores + dy.inputVector(increment)
+
+def shuffle(items, start, end):
+    if end <= start:
+        return
+    to_shuffle = items[start:end]
+    random.shuffle(to_shuffle)
+    items[start:end] = to_shuffle
+
+def transpose_lists(nested_list):
+    result = []
+    for i in range(len(nested_list[0])):
+        result.append([l[i] for l in nested_list])
+    return result
 
 class Feedforward(object):
     def __init__(self, model, input_dim, hidden_dims, output_dim):
@@ -63,6 +77,7 @@ class TopDownParser(object):
             split_hidden_dim,
             dropout,
             lstm_type,
+            lstm_context_size,
     ):
         self.spec = locals()
         self.spec.pop("self")
@@ -94,6 +109,7 @@ class TopDownParser(object):
         self.dropout = dropout
 
         self.lstm_type = lstm_type
+        self.lstm_context_size = lstm_context_size
 
     def param_collection(self):
         return self.model
@@ -138,7 +154,6 @@ class TopDownParser(object):
             return dy.concatenate([forward, backward])
 
         return span_encoding
-
     def get_truncated_span_encoding_batch(self, embeddings, distance):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
@@ -165,6 +180,87 @@ class TopDownParser(object):
 
         return span_encoding
 
+    def get_shuffled_span_encoding(self, embeddings, distance):
+        all_spans = []
+        all_lstm_outputs = []
+        for i in range(len(embeddings)-2):
+            for j in range(i+1,len(embeddings)-1):
+                all_spans.append((i,j))
+                lstm_inputs = embeddings[:] # copy
+                shuffle(lstm_inputs, 1, i-distance+1) # note not shuffling start/end padding
+                shuffle(lstm_inputs, i+distance+1, j-distance+1)
+                shuffle(lstm_inputs, j+distance+1, len(embeddings)-1)
+                all_lstm_outputs.append(self.lstm.transduce(lstm_inputs))
+        span_map = {span:idx for idx, span in enumerate(all_spans)}
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            lstm_outputs = all_lstm_outputs[span_map[(left,right)]]
+            forward = (
+                lstm_outputs[right][:self.lstm_dim] -
+                lstm_outputs[left][:self.lstm_dim])
+            backward = (
+                lstm_outputs[left + 1][self.lstm_dim:] -
+                lstm_outputs[right + 1][self.lstm_dim:])
+            return dy.concatenate([forward, backward])
+
+        return span_encoding
+
+    def get_shuffled_span_encoding_batch(self, embeddings, distance):
+        all_spans = []
+        all_lstm_inputs = []
+        for i in range(len(embeddings)-2):
+            for j in range(i+1,len(embeddings)-1):
+                all_spans.append((i,j))
+                lstm_inputs = embeddings[:] # copy
+                shuffle(lstm_inputs, 1, i-distance+1) # note not shuffling start/end padding
+                shuffle(lstm_inputs, i+distance+1, j-distance+1)
+                shuffle(lstm_inputs, j+distance+1, len(embeddings)-1)
+                all_lstm_inputs.append(lstm_inputs)
+        span_map = {span:idx for idx, span in enumerate(all_spans)}
+
+        all_lstm_inputs = [dy.concatenate_to_batch(items) for items in transpose_lists(all_lstm_inputs)]
+        all_lstm_outputs = self.lstm.transduce(all_lstm_inputs)
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            batch_index = span_map[(left,right)]
+            forward = (
+                dy.pick_batch_elem(all_lstm_outputs[right], batch_index)[:self.lstm_dim] -
+                dy.pick_batch_elem(all_lstm_outputs[left], batch_index)[:self.lstm_dim])
+            backward = (
+                dy.pick_batch_elem(all_lstm_outputs[left + 1], batch_index)[self.lstm_dim:] -
+                dy.pick_batch_elem(all_lstm_outputs[right + 1], batch_index)[self.lstm_dim:])
+            return dy.concatenate([forward, backward])
+
+        return span_encoding
+
+    def get_inside_span_encoding(self, embeddings, distance, shuffle_inside=False):
+        padded_embeddings = [embeddings[0]]*distance+embeddings+[embeddings[-1]]*distance
+        all_spans = []
+        all_lstm_outputs = []
+        for i in range(len(embeddings)-2):
+            for j in range(i+1,len(embeddings)-1):
+                all_spans.append((i,j))
+                lstm_inputs = padded_embeddings[i+1:j+1+2*distance]
+                if shuffle_inside:
+                    shuffle(lstm_inputs, 2*distance, len(lstm_inputs)-2*distance)
+                all_lstm_outputs.append(self.lstm.transduce(lstm_inputs))
+        span_map = {span:idx for idx, span in enumerate(all_spans)}
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            lstm_outputs = all_lstm_outputs[span_map[(left,right)]]
+            forward = (
+                lstm_outputs[-distance-1][:self.lstm_dim] -
+                lstm_outputs[distance-1][:self.lstm_dim])
+            backward = (
+                lstm_outputs[distance][self.lstm_dim:] -
+                lstm_outputs[-distance][self.lstm_dim:])
+            return dy.concatenate([forward, backward])
+
+        return span_encoding
+
     def parse(self, sentence, gold=None, explore=True):
         is_train = gold is not None
 
@@ -184,7 +280,11 @@ class TopDownParser(object):
             embeddings.append(dy.concatenate([tag_embedding, word_embedding]))
 
         if self.lstm_type == 'truncated':
-            span_encoding = self.get_truncated_span_encoding(embeddings, 3)
+            span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size)
+        elif self.lstm_type == 'shuffled':
+            span_encoding = self.get_shuffled_span_encoding_batch(embeddings, self.lstm_context_size)
+        elif self.lstm_type == 'inside':
+            span_encoding = self.get_inside_span_encoding(embeddings, self.lstm_context_size)
         else:
             span_encoding = self.get_basic_span_encoding(embeddings)
 
