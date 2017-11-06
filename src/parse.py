@@ -90,9 +90,9 @@ class TopDownParser(object):
         self.lstm_dim = lstm_dim
 
         self.tag_embeddings = self.model.add_lookup_parameters(
-            (tag_vocab.size, tag_embedding_dim))
+            (tag_vocab.size, tag_embedding_dim), name="tag-embeddings")
         self.word_embeddings = self.model.add_lookup_parameters(
-            (word_vocab.size, word_embedding_dim))
+            (word_vocab.size, word_embedding_dim), name="word-embeddings")
 
         self.lstm = dy.BiRNNBuilder(
             lstm_layers,

@@ -100,6 +100,15 @@ def run_train(args):
     )
     trainer = dy.AdamTrainer(model)
 
+    if args.random_embeddings:
+        lookup_parameters_to_update = [i for i,p in enumerate(model.lookup_parameters_list()) if "embeddings" not in p.name()]
+    else:
+        lookup_parameters_to_update = list(range(len(model.lookup_parameters_list())))
+    if args.random_lstm:
+        parameters_to_update = [i for i,p in enumerate(model.parameters_list()) if "birnn" not in p.name()]
+    else:
+        parameters_to_update = list(range(len(model.parameters_list())))
+
     total_processed = 0
     current_processed = 0
     check_every = len(train_parse) / args.checks_per_epoch
@@ -167,7 +176,7 @@ def run_train(args):
             batch_loss = dy.average(batch_losses)
             batch_loss_value = batch_loss.scalar_value()
             batch_loss.backward()
-            trainer.update()
+            trainer.update_subset(parameters_to_update, lookup_parameters_to_update)
 
             if (start_index // args.batch_size + 1) % args.print_frequency == 0:
                 print(
@@ -258,6 +267,8 @@ def main():
     subparser.add_argument("--print-vocabs", action="store_true")
     subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside"], default="basic")
     subparser.add_argument("--lstm-context-size", type=int, default=3)
+    subparser.add_argument("--random-embeddings", action="store_true")
+    subparser.add_argument("--random-lstm", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
 
     subparser = subparsers.add_parser("test")
