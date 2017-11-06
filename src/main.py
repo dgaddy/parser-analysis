@@ -98,6 +98,7 @@ def run_train(args):
         args.lstm_type,
         args.lstm_context_size,
         args.embedding_type,
+        args.concat_bow,
     )
     trainer = dy.AdamTrainer(model)
 
@@ -271,6 +272,7 @@ def main():
     subparser.add_argument("--embedding-type", choices=["word","tag","both"], default="both")
     subparser.add_argument("--random-embeddings", action="store_true")
     subparser.add_argument("--random-lstm", action="store_true")
+    subparser.add_argument("--concat-bow", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
 
     subparser = subparsers.add_parser("test")

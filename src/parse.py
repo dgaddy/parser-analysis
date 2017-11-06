@@ -31,6 +31,12 @@ def transpose_lists(nested_list):
         result.append([l[i] for l in nested_list])
     return result
 
+def bow_range(items, start, end):
+    if end <= start:
+        return dy.zeros(*items[0].dim())
+    else:
+        return dy.average(items[start:end]) # or esum
+
 class Feedforward(object):
     def __init__(self, model, input_dim, hidden_dims, output_dim):
         self.spec = locals()
@@ -79,6 +85,7 @@ class TopDownParser(object):
             lstm_type,
             lstm_context_size,
             embedding_type,
+            concat_bow,
     ):
         self.spec = locals()
         self.spec.pop("self")
@@ -110,10 +117,16 @@ class TopDownParser(object):
             self.model,
             dy.VanillaLSTMBuilder)
 
+        assert not (concat_bow and not lstm_type == 'truncated'), 'concat-bow only supported with truncated lstm-type'
+        self.concat_bow = concat_bow
+        forward_input_dim = 2 * lstm_dim
+        if concat_bow:
+            forward_input_dim += 3 * emb_dim
+
         self.f_label = Feedforward(
-            self.model, 2 * lstm_dim, [label_hidden_dim], label_vocab.size)
+            self.model, forward_input_dim, [label_hidden_dim], label_vocab.size)
         self.f_split = Feedforward(
-            self.model, 2 * lstm_dim, [split_hidden_dim], 1)
+            self.model, forward_input_dim, [split_hidden_dim], 1)
 
         self.dropout = dropout
 
@@ -142,7 +155,7 @@ class TopDownParser(object):
 
         return span_encoding
 
-    def get_truncated_span_encoding(self, embeddings, distance):
+    def get_truncated_span_encoding(self, embeddings, distance, concat_bow=False):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         forward_reps = []
         backward_reps = []
@@ -160,10 +173,17 @@ class TopDownParser(object):
             backward = (
                 backward_reps[left] -
                 backward_reps[right])
-            return dy.concatenate([forward, backward])
+
+            if concat_bow:
+                bow_before = bow_range(embeddings, 1, left-distance+1)
+                bow_inside = bow_range(embeddings, left+distance+1, right-distance+1)
+                bow_after = bow_range(embeddings, right+distance+1, len(embeddings)-1)
+                return dy.concatenate([forward, backward, bow_before, bow_inside, bow_after])
+            else:
+                return dy.concatenate([forward, backward])
 
         return span_encoding
-    def get_truncated_span_encoding_batch(self, embeddings, distance):
+    def get_truncated_span_encoding_batch(self, embeddings, distance, concat_bow=False):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
         for i in range(distance*2):
@@ -185,7 +205,14 @@ class TopDownParser(object):
             backward = (
                 dy.pick_batch_elem(backward_reps, left) -
                 dy.pick_batch_elem(backward_reps, right))
-            return dy.concatenate([forward, backward])
+
+            if concat_bow:
+                bow_before = bow_range(embeddings, 1, left-distance+1)
+                bow_inside = bow_range(embeddings, left+distance+1, right-distance+1)
+                bow_after = bow_range(embeddings, right+distance+1, len(embeddings)-1)
+                return dy.concatenate([forward, backward, bow_before, bow_inside, bow_after])
+            else:
+                return dy.concatenate([forward, backward])
 
         return span_encoding
 
@@ -294,7 +321,7 @@ class TopDownParser(object):
                 embeddings.append(tag_embedding)
 
         if self.lstm_type == 'truncated':
-            span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size)
+            span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size, self.concat_bow)
         elif self.lstm_type == 'shuffled':
             span_encoding = self.get_shuffled_span_encoding_batch(embeddings, self.lstm_context_size)
         elif self.lstm_type == 'inside':
