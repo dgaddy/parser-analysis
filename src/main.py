@@ -169,22 +169,23 @@ def run_train(args):
             batch_loss.backward()
             trainer.update()
 
-            print(
-                "epoch {:,} "
-                "batch {:,}/{:,} "
-                "processed {:,} "
-                "batch-loss {:.4f} "
-                "epoch-elapsed {} "
-                "total-elapsed {}".format(
-                    epoch,
-                    start_index // args.batch_size + 1,
-                    int(np.ceil(len(train_parse) / args.batch_size)),
-                    total_processed,
-                    batch_loss_value,
-                    format_elapsed(epoch_start_time),
-                    format_elapsed(start_time),
+            if (start_index // args.batch_size + 1) % args.print_frequency == 0:
+                print(
+                    "epoch {:,} "
+                    "batch {:,}/{:,} "
+                    "processed {:,} "
+                    "batch-loss {:.4f} "
+                    "epoch-elapsed {} "
+                    "total-elapsed {}".format(
+                        epoch,
+                        start_index // args.batch_size + 1,
+                        int(np.ceil(len(train_parse) / args.batch_size)),
+                        total_processed,
+                        batch_loss_value,
+                        format_elapsed(epoch_start_time),
+                        format_elapsed(start_time),
+                    )
                 )
-            )
 
             if current_processed >= check_every:
                 current_processed -= check_every
@@ -257,6 +258,7 @@ def main():
     subparser.add_argument("--print-vocabs", action="store_true")
     subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside"], default="basic")
     subparser.add_argument("--lstm-context-size", type=int, default=3)
+    subparser.add_argument("--print-frequency", type=int, default=1)
 
     subparser = subparsers.add_parser("test")
     subparser.set_defaults(callback=run_test)
