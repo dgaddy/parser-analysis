@@ -86,20 +86,24 @@ class TopDownParser(object):
             lstm_context_size,
             embedding_type,
             concat_bow,
+            random_emb,
+            random_lstm,
     ):
         self.spec = locals()
         self.spec.pop("self")
         self.spec.pop("model")
 
         self.model = model.add_subcollection("Parser")
+        self.trainable_parameters = self.model.add_subcollection("Trainable")
         self.tag_vocab = tag_vocab
         self.word_vocab = word_vocab
         self.label_vocab = label_vocab
         self.lstm_dim = lstm_dim
 
-        self.tag_embeddings = self.model.add_lookup_parameters(
+        emb_model = self.model if random_emb else self.trainable_parameters
+        self.tag_embeddings = emb_model.add_lookup_parameters(
             (tag_vocab.size, tag_embedding_dim), name="tag-embeddings")
-        self.word_embeddings = self.model.add_lookup_parameters(
+        self.word_embeddings = emb_model.add_lookup_parameters(
             (word_vocab.size, word_embedding_dim), name="word-embeddings")
 
         self.embedding_type = embedding_type
@@ -114,7 +118,7 @@ class TopDownParser(object):
             lstm_layers,
             emb_dim,
             2 * lstm_dim,
-            self.model,
+            self.model if random_lstm else self.trainable_parameters,
             dy.VanillaLSTMBuilder)
 
         assert not (concat_bow and not lstm_type == 'truncated'), 'concat-bow only supported with truncated lstm-type'
@@ -124,9 +128,9 @@ class TopDownParser(object):
             forward_input_dim += 3 * emb_dim
 
         self.f_label = Feedforward(
-            self.model, forward_input_dim, [label_hidden_dim], label_vocab.size)
+            self.trainable_parameters, forward_input_dim, [label_hidden_dim], label_vocab.size)
         self.f_split = Feedforward(
-            self.model, forward_input_dim, [split_hidden_dim], 1)
+            self.trainable_parameters, forward_input_dim, [split_hidden_dim], 1)
 
         self.dropout = dropout
 
