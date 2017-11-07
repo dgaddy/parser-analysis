@@ -324,6 +324,8 @@ class TopDownParser(object):
             elif self.embedding_type == 'tag':
                 embeddings.append(tag_embedding)
 
+        self.lstm.transduce([embeddings[0]]) # this sets the lstm dropout mask to batch size 1, which works around a dynet problem with different batch sizes
+
         if self.lstm_type == 'truncated':
             span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size, self.concat_bow)
         elif self.lstm_type == 'shuffled':
