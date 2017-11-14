@@ -127,6 +127,8 @@ class TopDownParser(object):
         if concat_bow:
             forward_input_dim += 3 * emb_dim
 
+        self.forward_input_dim = forward_input_dim
+        self.label_hidden_dim = label_hidden_dim
         self.f_label = Feedforward(
             self.trainable_parameters, forward_input_dim, [label_hidden_dim], label_vocab.size)
         self.f_split = Feedforward(
@@ -143,6 +145,10 @@ class TopDownParser(object):
     @classmethod
     def from_spec(cls, spec, model):
         return cls(model, **spec)
+
+    def refresh_label_net(self):
+        self.f_label = Feedforward(self.trainable_parameters,
+                self.forward_input_dim, [self.label_hidden_dim], self.label_vocab.size)
 
     def get_basic_span_encoding(self, embeddings):
         lstm_outputs = self.lstm.transduce(embeddings)
@@ -301,14 +307,7 @@ class TopDownParser(object):
 
         return span_encoding
 
-    def parse(self, sentence, gold=None, explore=True):
-        is_train = gold is not None
-
-        if is_train:
-            self.lstm.set_dropout(self.dropout)
-        else:
-            self.lstm.disable_dropout()
-
+    def get_embeddings(self, sentence, is_train=False):
         embeddings = []
         for tag, word in [(START, START)] + sentence + [(STOP, STOP)]:
             tag_embedding = self.tag_embeddings[self.tag_vocab.index(tag)]
@@ -323,6 +322,17 @@ class TopDownParser(object):
                 embeddings.append(word_embedding)
             elif self.embedding_type == 'tag':
                 embeddings.append(tag_embedding)
+        return embeddings
+
+    def parse(self, sentence, gold=None, explore=True):
+        is_train = gold is not None
+
+        if is_train:
+            self.lstm.set_dropout(self.dropout)
+        else:
+            self.lstm.disable_dropout()
+
+        embeddings = self.get_embeddings(sentence, is_train)
 
         self.lstm.transduce([embeddings[0]]) # this sets the lstm dropout mask to batch size 1, which works around a dynet problem with different batch sizes
 
@@ -413,3 +423,51 @@ class TopDownParser(object):
         if is_train and not explore:
             assert gold.convert().linearize() == tree.convert().linearize()
         return tree, loss
+
+    def lstm_derivative(self, sentence, position):
+        self.lstm.disable_dropout()
+        embeddings = self.get_embeddings(sentence, is_train=False)
+        lstm_outputs = self.lstm.transduce(embeddings)
+
+        forward = lstm_outputs[position][:self.lstm_dim]
+        backward = lstm_outputs[position + 1][self.lstm_dim:]
+        c = dy.concatenate([forward, backward])
+        s = dy.sum_elems(c)
+        s.backward()
+        avg_gradients = [np.abs(embed.gradient()).mean() for embed in embeddings]
+        return avg_gradients
+
+    def predict_parent_label_for_spans(self, sentence, gold):
+        self.lstm.disable_dropout()
+        embeddings = self.get_embeddings(sentence, is_train=False)
+        span_encoding = self.get_basic_span_encoding(embeddings)
+
+        correct = 0
+        total = 0
+        total_loss = dy.zeros(1)
+        def accumulate(left, right, target_label_index):
+            nonlocal correct, total, total_loss
+            label_scores = self.f_label(span_encoding(left, right))
+
+            # predicted label
+            label_scores_np = label_scores.npvalue()
+            argmax_label_index = int(label_scores_np.argmax())
+            if argmax_label_index == target_label_index:
+                correct += 1
+            total += 1
+
+            # loss for training
+            augmented_label_scores = augment(label_scores, target_label_index)
+            augmented_argmax_label_index = int(augmented_label_scores.npvalue().argmax())
+            label_loss = (
+                label_scores[augmented_argmax_label_index] -
+                label_scores[target_label_index]
+                if augmented_argmax_label_index != target_label_index else dy.zeros(1))
+            total_loss = total_loss + label_loss
+
+        for node, parent in gold.iterate_spans_with_parents(): # doesn't include top level
+            parent_label_index = self.label_vocab.index(parent.label)
+            accumulate(node.left, node.right, parent_label_index)
+        accumulate(gold.left, gold.right, 0) # 0 is no-label index, since top has no parent label
+
+        return total_loss, correct, total

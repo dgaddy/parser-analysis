@@ -225,6 +225,80 @@ def run_test(args):
         )
     )
 
+def predict_labels(args):
+    print("Loading training trees from {}...".format(args.train_path))
+    train_treebank = trees.load_trees(args.train_path)
+    print("Loaded {:,} training examples.".format(len(train_treebank)))
+
+    print("Loading development trees from {}...".format(args.dev_path))
+    dev_treebank = trees.load_trees(args.dev_path)
+    print("Loaded {:,} development examples.".format(len(dev_treebank)))
+
+    print("Processing trees for training...")
+    train_parse = [tree.convert() for tree in train_treebank]
+    dev_parse = [tree.convert() for tree in dev_treebank]
+
+    print("Loading model from {}...".format(args.model_path_base))
+    model = dy.ParameterCollection()
+    [parser] = dy.load(args.model_path_base, model)
+    parser.refresh_label_net()
+    trainer = dy.AdamTrainer(parser.f_label.model)
+
+    for epoch_index in range(1000):
+        np.random.shuffle(train_parse)
+        for start_index in range(0, len(train_parse), args.batch_size):
+            dy.renew_cg()
+            batch_losses = []
+            for tree in train_parse[start_index:start_index + args.batch_size]:
+                sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
+                loss, _, _ = parser.predict_parent_label_for_spans(sentence, tree)
+                batch_losses.append(loss)
+            batch_loss = dy.average(batch_losses)
+            batch_loss_value = batch_loss.scalar_value()
+            batch_loss.backward()
+            trainer.update()
+
+        correct = 0
+        total = 0
+        for tree in dev_parse:
+            dy.renew_cg()
+            sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
+            _, c, t = parser.predict_parent_label_for_spans(sentence, tree)
+            correct += c
+            total += t
+        print("dev score at epoch", epoch_index+1, ":", correct/total)
+
+def derivative_analysis(args):
+    print("Loading development trees from {}...".format(args.dev_path))
+    dev_treebank = trees.load_trees(args.dev_path)
+    print("Loaded {:,} development examples.".format(len(dev_treebank)))
+
+    print("Processing trees...")
+    dev_parse = [tree.convert() for tree in dev_treebank]
+
+    print("Loading model from {}...".format(args.model_path_base))
+    model = dy.ParameterCollection()
+    [parser] = dy.load(args.model_path_base, model)
+
+    total_grad = np.zeros(500)
+    total_count = np.zeros(500)
+    for tree in dev_parse:
+        sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
+        for position in range(len(sentence)+1):
+            dy.renew_cg()
+            gradients = np.array(parser.lstm_derivative(sentence, position))
+            gradients /= gradients.max()
+            buckets = list(reversed(range(position+1))) + list(range(len(sentence)-position+1))
+            for position, grad in zip(buckets, gradients):
+                total_grad[position] += grad
+                total_count[position] += 1
+
+    for i in range(500):
+        if total_count[i] == 0:
+            break
+        print(total_grad[i]/total_count[i])
+
+
 def main():
     dynet_args = [
         "--dynet-mem",
@@ -267,6 +341,13 @@ def main():
     subparser.add_argument("--random-lstm", action="store_true")
     subparser.add_argument("--concat-bow", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
+    train_subparser = subparser
+
+    subparser = subparsers.add_parser("train-label", parents=[train_subparser], add_help=False)
+    subparser.set_defaults(callback=predict_labels)
+
+    subparser = subparsers.add_parser("derivative", parents=[train_subparser], add_help=False)
+    subparser.set_defaults(callback=derivative_analysis)
 
     subparser = subparsers.add_parser("test")
     subparser.set_defaults(callback=run_test)

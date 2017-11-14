@@ -109,6 +109,12 @@ class InternalParseNode(ParseNode):
             if left < child.left < right
         ]
 
+    def iterate_spans_with_parents(self):
+        for child in self.children:
+            if isinstance(child, InternalParseNode):
+                yield child, self
+            yield from child.iterate_spans_with_parents()
+
 class LeafParseNode(ParseNode):
     def __init__(self, index, tag, word):
         assert isinstance(index, int)
@@ -127,6 +133,9 @@ class LeafParseNode(ParseNode):
 
     def convert(self):
         return LeafTreebankNode(self.tag, self.word)
+
+    def iterate_spans_with_parents(self):
+        return []
 
 def load_trees(path, strip_top=True):
     with open(path) as infile:
