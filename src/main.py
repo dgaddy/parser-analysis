@@ -2,6 +2,7 @@ import argparse
 import itertools
 import os.path
 import time
+from collections import defaultdict
 
 import dynet as dy
 import numpy as np
@@ -237,6 +238,25 @@ def predict_labels(args):
     print("Processing trees for training...")
     train_parse = [tree.convert() for tree in train_treebank]
     dev_parse = [tree.convert() for tree in dev_treebank]
+
+    print("Calculating baseline...")
+    counts = defaultdict(lambda : defaultdict(int))
+    for tree in train_parse:
+        for node, parent in tree.iterate_spans_with_parents(): # doesn't include top level
+            counts[node.label][parent.label] += 1
+        counts[tree.label]['<NONE>'] += 1
+    predictions = {label:max(counts.keys(), key=lambda x: counts[x]) for label, counts in counts.items()}
+    correct = 0
+    total = 0
+    for tree in dev_parse:
+        for node, parent in tree.iterate_spans_with_parents(): # doesn't include top level
+            if predictions[node.label] == parent.label:
+                correct += 1
+            total += 1
+        if predictions[tree.label] == '<NONE>':
+            correct += 1
+        total += 1
+    print("baseline score:", correct/total)
 
     print("Loading model from {}...".format(args.model_path_base))
     model = dy.ParameterCollection()
