@@ -482,7 +482,8 @@ class ChartParser(ParserBase):
                 for left in range(0, len(sentence) + 1 - length):
                     right = left + length
 
-                    label_scores = get_label_scores(left, right)
+                    label_scores_expr = get_label_scores(left, right)
+                    label_scores_np = label_scores_expr.npvalue()
 
                     if is_train:
                         oracle_label = gold.oracle_label(left, right)
@@ -490,24 +491,28 @@ class ChartParser(ParserBase):
 
                     if force_gold:
                         label = oracle_label
-                        label_score = label_scores[oracle_label_index]
+                        label_score_expr = label_scores_expr[oracle_label_index]
+                        label_score = label_scores_np[oracle_label_index]
                     else:
                         if is_train:
-                            label_scores = augment(label_scores, oracle_label_index)
-                        label_scores_np = label_scores.npvalue()
+                            # augment the np version, which we use to get argmax
+                            # the _expr versions won't have augmentation, but derivative is same
+                            label_scores_np += 1
+                            label_scores_np[oracle_label_index] -= 1
                         argmax_label_index = int(
                             label_scores_np.argmax() if length < len(sentence) else
                             label_scores_np[1:].argmax() + 1)
                         argmax_label = self.label_vocab.value(argmax_label_index)
                         label = argmax_label
-                        label_score = label_scores[argmax_label_index]
+                        label_score_expr = label_scores_expr[argmax_label_index]
+                        label_score = label_scores_np[argmax_label_index]
 
                     if length == 1:
                         tag, word = sentence[left]
                         tree = trees.LeafParseNode(left, tag, word)
                         if label:
                             tree = trees.InternalParseNode(label, [tree])
-                        chart[left, right] = [tree], label_score
+                        chart[left, right] = [tree], label_score, label_score_expr
                         continue
 
                     if force_gold:
@@ -518,32 +523,33 @@ class ChartParser(ParserBase):
                         best_split = max(
                             range(left + 1, right),
                             key=lambda split:
-                                chart[left, split][1].value() +
-                                chart[split, right][1].value())
+                                chart[left, split][1] +
+                                chart[split, right][1])
 
-                    left_trees, left_score = chart[left, best_split]
-                    right_trees, right_score = chart[best_split, right]
+                    left_trees, left_score, left_score_expr = chart[left, best_split]
+                    right_trees, right_score, right_score_expr = chart[best_split, right]
 
                     children = left_trees + right_trees
                     if label:
                         children = [trees.InternalParseNode(label, children)]
 
-                    chart[left, right] = (
-                        children, label_score + left_score + right_score)
+                    chart[left, right] = (children, label_score + left_score + right_score,
+                        label_score_expr + left_score_expr + right_score_expr)
 
-            children, score = chart[0, len(sentence)]
+            children, score, score_expr = chart[0, len(sentence)]
             assert len(children) == 1
-            return children[0], score
+            return children[0], score, score_expr
 
-        tree, score = helper(False)
+        tree, score, score_expr = helper(False)
         if is_train:
-            oracle_tree, oracle_score = helper(True)
+            oracle_tree, oracle_score, oracle_score_expr = helper(True)
             assert oracle_tree.convert().linearize() == gold.convert().linearize()
             correct = tree.convert().linearize() == gold.convert().linearize()
-            loss = dy.zeros(1) if correct else score - oracle_score
-            return tree, loss
+            loss_expr = dy.zeros(1) if correct else score_expr - oracle_score_expr
+            loss = 0 if correct else score - oracle_score
+            return tree, loss_expr
         else:
-            return tree, score
+            return tree, score_expr
 
 class LabelPrediction(ParserBase):
     def __init__(
