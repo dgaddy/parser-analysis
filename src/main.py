@@ -84,38 +84,35 @@ def run_train(args):
     print("Initializing model...")
     model = dy.ParameterCollection()
     print("Input LSTM type:", args.lstm_type)
+    span_representation_args = [
+        tag_vocab,
+        word_vocab,
+        label_vocab,
+        args.tag_embedding_dim,
+        args.word_embedding_dim,
+        args.lstm_layers,
+        args.lstm_dim,
+        args.dropout,
+        args.lstm_type,
+        args.lstm_context_size,
+        args.embedding_type,
+        args.concat_bow,
+        args.random_embeddings,
+        args.random_lstm,
+    ]
+ 
     if args.parser_type == "top-down":
         parser = parse.TopDownParser(
             model,
-            tag_vocab,
-            word_vocab,
-            label_vocab,
-            args.tag_embedding_dim,
-            args.word_embedding_dim,
-            args.lstm_layers,
-            args.lstm_dim,
             args.label_hidden_dim,
             args.split_hidden_dim,
-            args.dropout,
-            args.lstm_type,
-            args.lstm_context_size,
-            args.embedding_type,
-            args.concat_bow,
-            args.random_embeddings,
-            args.random_lstm,
+            span_representation_args
         )
     else:
         parser = parse.ChartParser(
             model,
-            tag_vocab,
-            word_vocab,
-            label_vocab,
-            args.tag_embedding_dim,
-            args.word_embedding_dim,
-            args.lstm_layers,
-            args.lstm_dim,
             args.label_hidden_dim,
-            args.dropout,
+            span_representation_args
         )
     trainer = dy.AdamTrainer(parser.trainable_parameters)
 

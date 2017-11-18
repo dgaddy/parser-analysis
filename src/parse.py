@@ -68,7 +68,7 @@ class Feedforward(object):
                 x = dy.rectify(x)
         return x
 
-class TopDownParser(object):
+class ParserBase(object):
     def __init__(
             self,
             model,
@@ -79,8 +79,6 @@ class TopDownParser(object):
             word_embedding_dim,
             lstm_layers,
             lstm_dim,
-            label_hidden_dim,
-            split_hidden_dim,
             dropout,
             lstm_type,
             lstm_context_size,
@@ -123,16 +121,10 @@ class TopDownParser(object):
 
         assert not (concat_bow and not lstm_type == 'truncated'), 'concat-bow only supported with truncated lstm-type'
         self.concat_bow = concat_bow
-        forward_input_dim = 2 * lstm_dim
+        output_dim = 2 * lstm_dim
         if concat_bow:
-            forward_input_dim += 3 * emb_dim
-
-        self.forward_input_dim = forward_input_dim
-        self.label_hidden_dim = label_hidden_dim
-        self.f_label = Feedforward(
-            self.trainable_parameters, forward_input_dim, [label_hidden_dim], label_vocab.size)
-        self.f_split = Feedforward(
-            self.trainable_parameters, forward_input_dim, [split_hidden_dim], 1)
+            output_dim += 3 * emb_dim
+        self.span_representation_dimension = output_dim
 
         self.dropout = dropout
 
@@ -145,10 +137,6 @@ class TopDownParser(object):
     @classmethod
     def from_spec(cls, spec, model):
         return cls(model, **spec)
-
-    def refresh_label_net(self):
-        self.f_label = Feedforward(self.trainable_parameters,
-                self.forward_input_dim, [self.label_hidden_dim], self.label_vocab.size)
 
     def get_basic_span_encoding(self, embeddings):
         lstm_outputs = self.lstm.transduce(embeddings)
@@ -193,6 +181,7 @@ class TopDownParser(object):
                 return dy.concatenate([forward, backward])
 
         return span_encoding
+
     def get_truncated_span_encoding_batch(self, embeddings, distance, concat_bow=False):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
@@ -324,9 +313,7 @@ class TopDownParser(object):
                 embeddings.append(tag_embedding)
         return embeddings
 
-    def parse(self, sentence, gold=None, explore=True):
-        is_train = gold is not None
-
+    def get_representation_function(self, sentence, is_train):
         if is_train:
             self.lstm.set_dropout(self.dropout)
         else:
@@ -344,6 +331,43 @@ class TopDownParser(object):
             span_encoding = self.get_inside_span_encoding(embeddings, self.lstm_context_size)
         else:
             span_encoding = self.get_basic_span_encoding(embeddings)
+
+        return span_encoding
+
+    def lstm_derivative(self, sentence, position):
+        self.lstm.disable_dropout()
+        embeddings = self.get_embeddings(sentence, is_train=False)
+        lstm_outputs = self.lstm.transduce(embeddings)
+
+        forward = lstm_outputs[position][:self.lstm_dim]
+        backward = lstm_outputs[position + 1][self.lstm_dim:]
+        c = dy.concatenate([forward, backward])
+        s = dy.sum_elems(c)
+        s.backward()
+        avg_gradients = [np.abs(embed.gradient()).mean() for embed in embeddings]
+        return avg_gradients
+
+class TopDownParser(ParserBase):
+    def __init__(
+            self,
+            model,
+            label_hidden_dim,
+            split_hidden_dim,
+            span_representation_args
+    ):
+        super().__init__(model, *span_representation_args)
+
+        self.spec = {'label_hidden_dim':label_hidden_dim, 'split_hidden_dim':split_hidden_dim, 'span_representation_args':span_representation_args}
+
+        self.f_label = Feedforward(
+            self.trainable_parameters, self.span_representation_dimension, [label_hidden_dim], self.label_vocab.size)
+        self.f_split = Feedforward(
+            self.trainable_parameters, self.span_representation_dimension, [split_hidden_dim], 1)
+
+    def parse(self, sentence, gold=None, explore=True):
+        is_train = gold is not None
+
+        get_span_encoding = self.get_representation_function(sentence, is_train)
 
         def helper(left, right):
             assert 0 <= left < right <= len(sentence)
@@ -424,131 +448,24 @@ class TopDownParser(object):
             assert gold.convert().linearize() == tree.convert().linearize()
         return tree, loss
 
-    def lstm_derivative(self, sentence, position):
-        self.lstm.disable_dropout()
-        embeddings = self.get_embeddings(sentence, is_train=False)
-        lstm_outputs = self.lstm.transduce(embeddings)
-
-        forward = lstm_outputs[position][:self.lstm_dim]
-        backward = lstm_outputs[position + 1][self.lstm_dim:]
-        c = dy.concatenate([forward, backward])
-        s = dy.sum_elems(c)
-        s.backward()
-        avg_gradients = [np.abs(embed.gradient()).mean() for embed in embeddings]
-        return avg_gradients
-
-    def predict_parent_label_for_spans(self, sentence, gold):
-        self.lstm.disable_dropout()
-        embeddings = self.get_embeddings(sentence, is_train=False)
-        span_encoding = self.get_basic_span_encoding(embeddings)
-
-        correct = 0
-        total = 0
-        total_loss = dy.zeros(1)
-        def accumulate(left, right, target_label_index):
-            nonlocal correct, total, total_loss
-            label_scores = self.f_label(span_encoding(left, right))
-
-            # predicted label
-            label_scores_np = label_scores.npvalue()
-            argmax_label_index = int(label_scores_np.argmax())
-            if argmax_label_index == target_label_index:
-                correct += 1
-            total += 1
-
-            # loss for training
-            augmented_label_scores = augment(label_scores, target_label_index)
-            augmented_argmax_label_index = int(augmented_label_scores.npvalue().argmax())
-            label_loss = (
-                label_scores[augmented_argmax_label_index] -
-                label_scores[target_label_index]
-                if augmented_argmax_label_index != target_label_index else dy.zeros(1))
-            total_loss = total_loss + label_loss
-
-        for node, parent in gold.iterate_spans_with_parents(): # doesn't include top level
-            parent_label_index = self.label_vocab.index(parent.label)
-            accumulate(node.left, node.right, parent_label_index)
-        accumulate(gold.left, gold.right, 0) # 0 is no-label index, since top has no parent label
-
-        return total_loss, correct, total
-
-class ChartParser(object):
+class ChartParser(ParserBase):
     def __init__(
             self,
             model,
-            tag_vocab,
-            word_vocab,
-            label_vocab,
-            tag_embedding_dim,
-            word_embedding_dim,
-            lstm_layers,
-            lstm_dim,
             label_hidden_dim,
-            dropout,
+            span_representation_args
     ):
-        self.spec = locals()
-        self.spec.pop("self")
-        self.spec.pop("model")
+        super().__init__(model, *span_representation_args)
 
-        self.model = model.add_subcollection("Parser")
-        self.tag_vocab = tag_vocab
-        self.word_vocab = word_vocab
-        self.label_vocab = label_vocab
-        self.lstm_dim = lstm_dim
-
-        self.tag_embeddings = self.model.add_lookup_parameters(
-            (tag_vocab.size, tag_embedding_dim))
-        self.word_embeddings = self.model.add_lookup_parameters(
-            (word_vocab.size, word_embedding_dim))
-
-        self.lstm = dy.BiRNNBuilder(
-            lstm_layers,
-            tag_embedding_dim + word_embedding_dim,
-            2 * lstm_dim,
-            self.model,
-            dy.VanillaLSTMBuilder)
+        self.spec = {'label_hidden_dim':label_hidden_dim, 'span_representation_args':span_representation_args}
 
         self.f_label = Feedforward(
-            self.model, 2 * lstm_dim, [label_hidden_dim], label_vocab.size - 1)
-
-        self.dropout = dropout
-
-    def param_collection(self):
-        return self.model
-
-    @classmethod
-    def from_spec(cls, spec, model):
-        return cls(model, **spec)
+            self.trainable_parameters, self.span_representation_dimension, [label_hidden_dim], self.label_vocab.size - 1)
 
     def parse(self, sentence, gold=None):
         is_train = gold is not None
 
-        if is_train:
-            self.lstm.set_dropout(self.dropout)
-        else:
-            self.lstm.disable_dropout()
-
-        embeddings = []
-        for tag, word in [(START, START)] + sentence + [(STOP, STOP)]:
-            tag_embedding = self.tag_embeddings[self.tag_vocab.index(tag)]
-            if word not in (START, STOP):
-                count = self.word_vocab.count(word)
-                if not count or (is_train and np.random.rand() < 1 / (1 + count)):
-                    word = UNK
-            word_embedding = self.word_embeddings[self.word_vocab.index(word)]
-            embeddings.append(dy.concatenate([tag_embedding, word_embedding]))
-
-        lstm_outputs = self.lstm.transduce(embeddings)
-
-        @functools.lru_cache(maxsize=None)
-        def get_span_encoding(left, right):
-            forward = (
-                lstm_outputs[right][:self.lstm_dim] -
-                lstm_outputs[left][:self.lstm_dim])
-            backward = (
-                lstm_outputs[left + 1][self.lstm_dim:] -
-                lstm_outputs[right + 1][self.lstm_dim:])
-            return dy.concatenate([forward, backward])
+        get_span_encoding = self.get_representation_function(sentence, is_train)
 
         @functools.lru_cache(maxsize=None)
         def get_label_scores(left, right):
@@ -627,3 +544,57 @@ class ChartParser(object):
             return tree, loss
         else:
             return tree, score
+
+class LabelPrediction(ParserBase):
+    def __init__(
+            self,
+            model,
+            label_hidden_dim,
+            *span_representation_args
+    ):
+        super().__init__(*span_representation_args)
+
+        self.spec = locals()
+        self.spec.pop("self")
+        self.spec.pop("model")
+
+        self.label_hidden_dim = label_hidden_dim
+        self.f_label = Feedforward(
+            self.trainable_parameters, self.span_representation_dimension, [label_hidden_dim], label_vocab.size)
+
+    def refresh_label_net(self):
+        self.f_label = Feedforward(self.trainable_parameters,
+                self.span_representation_dimension, [self.label_hidden_dim], self.label_vocab.size)
+
+    def predict_parent_label_for_spans(self, sentence, gold):
+        span_encoding = self.get_span_representation_function(sentence, is_train=False)
+
+        correct = 0
+        total = 0
+        total_loss = dy.zeros(1)
+        def accumulate(left, right, target_label_index):
+            nonlocal correct, total, total_loss
+            label_scores = self.f_label(span_encoding(left, right))
+
+            # predicted label
+            label_scores_np = label_scores.npvalue()
+            argmax_label_index = int(label_scores_np.argmax())
+            if argmax_label_index == target_label_index:
+                correct += 1
+            total += 1
+
+            # loss for training
+            augmented_label_scores = augment(label_scores, target_label_index)
+            augmented_argmax_label_index = int(augmented_label_scores.npvalue().argmax())
+            label_loss = (
+                label_scores[augmented_argmax_label_index] -
+                label_scores[target_label_index]
+                if augmented_argmax_label_index != target_label_index else dy.zeros(1))
+            total_loss = total_loss + label_loss
+
+        for node, parent in gold.iterate_spans_with_parents(): # doesn't include top level
+            parent_label_index = self.label_vocab.index(parent.label)
+            accumulate(node.left, node.right, parent_label_index)
+        accumulate(gold.left, gold.right, 0) # 0 is no-label index, since top has no parent label
+
+        return total_loss, correct, total
