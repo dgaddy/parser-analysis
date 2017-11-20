@@ -3,6 +3,7 @@ import os.path
 import re
 import subprocess
 import tempfile
+from collections import Counter
 
 import trees
 
@@ -84,3 +85,26 @@ def evalb(evalb_dir, gold_trees, predicted_trees):
         print("Output path: {}".format(output_path))
 
     return fscore
+
+def bracket_f1(gold_trees, predicted_trees):
+    correct_total = 0
+    gold_total = 0
+    pred_total = 0
+    for gold_tree, predicted_tree in zip(gold_trees, predicted_trees):
+        gold_brackets = gold_tree.brackets()
+        predicted_brackets = predicted_tree.brackets()
+        gbc = Counter(gold_brackets)
+        pbc = Counter(predicted_brackets)
+        correct = 0
+        for gb in gbc:
+            if gb in pbc:
+                correct += min(gbc[gb], pbc[gb])
+
+        correct_total += correct
+        gold_total += len(gold_brackets)
+        pred_total += len(predicted_brackets)
+
+    precision = 100.0 * correct_total/pred_total
+    recall = 100.0 * correct_total/gold_total
+    f = (2 * precision * recall) / (precision + recall)
+    return FScore(recall, precision, f)

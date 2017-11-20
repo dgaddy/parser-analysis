@@ -37,6 +37,27 @@ class InternalTreebankNode(TreebankNode):
 
         return InternalParseNode(tuple(sublabels), children)
 
+    def brackets(self, advp_prt=True):
+        return self._brackets(0, advp_prt)[0]
+
+    def _brackets(self, start=0, advp_prt=True):
+        results = []
+
+        position = start
+        for child in self.children:
+            b, e = child._brackets(position, advp_prt)
+            results.extend(b)
+            position = e
+        end = position
+
+        label = self.label
+        if label != 'TOP':
+            if advp_prt and label =='PRT':
+                label = 'ADVP'
+            results.append((start, end, label))
+
+        return results, end
+
 class LeafTreebankNode(TreebankNode):
     def __init__(self, tag, word):
         assert isinstance(tag, str)
@@ -53,6 +74,12 @@ class LeafTreebankNode(TreebankNode):
 
     def convert(self, index=0):
         return LeafParseNode(index, self.tag, self.word)
+
+    def _brackets(self, start=0, advp_prt=True):
+        if self.tag in [",", ".", ":", "``", "''"]:
+            return [], start
+        else:
+            return [], start+1
 
 class ParseNode(object):
     pass
