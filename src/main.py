@@ -108,8 +108,14 @@ def run_train(args):
             args.split_hidden_dim,
             span_representation_args
         )
-    else:
+    elif args.parser_type == 'chart':
         parser = parse.ChartParser(
+            model,
+            args.label_hidden_dim,
+            span_representation_args
+        )
+    elif args.parser_type == 'independent':
+        parser = parse.IndependentParser(
             model,
             args.label_hidden_dim,
             span_representation_args
@@ -137,7 +143,7 @@ def run_train(args):
             predicted, _ = parser.parse(sentence)
             dev_predicted.append(predicted.convert())
 
-        dev_fscore = evaluate.evalb(args.evalb_dir, dev_treebank, dev_predicted)
+        dev_fscore = evaluate.bracket_f1(dev_treebank, dev_predicted)
 
         print(
             "dev-fscore {} "
@@ -230,7 +236,7 @@ def run_test(args):
         predicted, _ = parser.parse(sentence)
         test_predicted.append(predicted.convert())
 
-    test_fscore = evaluate.evalb(args.evalb_dir, test_treebank, test_predicted)
+    test_fscore = evaluate.bracket_f1(test_treebank, test_predicted)
 
     print(
         "test-fscore {} "
@@ -352,7 +358,7 @@ def main():
     for arg in dynet_args:
         subparser.add_argument(arg)
     subparser.add_argument("--numpy-seed", type=int)
-    subparser.add_argument("--parser-type", choices=["top-down", "chart"], required=True)
+    subparser.add_argument("--parser-type", choices=["top-down", "chart", "independent"], required=True)
     subparser.add_argument("--tag-embedding-dim", type=int, default=50)
     subparser.add_argument("--word-embedding-dim", type=int, default=100)
     subparser.add_argument("--lstm-layers", type=int, default=2)

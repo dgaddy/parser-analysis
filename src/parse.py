@@ -551,6 +551,64 @@ class ChartParser(ParserBase):
         else:
             return tree, score_expr
 
+class IndependentParser(ParserBase):
+    def __init__(
+            self,
+            model,
+            label_hidden_dim,
+            span_representation_args
+    ):
+        super().__init__(model, *span_representation_args)
+
+        self.spec = {'label_hidden_dim':label_hidden_dim, 'span_representation_args':span_representation_args}
+
+        self.f_label = Feedforward(
+            self.trainable_parameters, self.span_representation_dimension, [label_hidden_dim], self.label_vocab.size - 1)
+
+    def parse(self, sentence, gold=None):
+        is_train = gold is not None
+
+        get_span_encoding = self.get_representation_function(sentence, is_train)
+
+        @functools.lru_cache(maxsize=None)
+        def get_label_scores(left, right):
+            non_empty_label_scores = self.f_label(get_span_encoding(left, right))
+            return dy.concatenate([dy.zeros(1), non_empty_label_scores])
+
+        brackets = trees.SpanList(sentence)
+        total_loss = dy.zeros(1)
+        for length in range(1, len(sentence) + 1):
+            for left in range(0, len(sentence) + 1 - length):
+                right = left + length
+
+                label_scores_expr = get_label_scores(left, right)
+                label_scores_np = label_scores_expr.npvalue()
+
+                if is_train:
+                    oracle_label = gold.oracle_label(left, right)
+                    oracle_label_index = self.label_vocab.index(oracle_label)
+                    oracle_label_score_expr = label_scores_expr[oracle_label_index]
+
+                    # augment the np version, which we use to get argmax
+                    # the _expr versions won't have augmentation, but derivative is same
+                    label_scores_np += 1
+                    label_scores_np[oracle_label_index] -= 1
+
+                argmax_label_index = int(
+                    label_scores_np.argmax() if length < len(sentence) else
+                    label_scores_np[1:].argmax() + 1)
+                argmax_label = self.label_vocab.value(argmax_label_index)
+                label = argmax_label
+                label_score_expr = label_scores_expr[argmax_label_index]
+                label_score = label_scores_np[argmax_label_index]
+                for sublabel in label: # note that no_label is just an empty tuple
+                    brackets.add(left, right, sublabel)
+
+                if is_train and argmax_label != oracle_label:
+                    total_loss = total_loss + label_score_expr - oracle_label_score_expr
+
+        return brackets, total_loss
+
 class LabelPrediction(ParserBase):
     def __init__(
             self,

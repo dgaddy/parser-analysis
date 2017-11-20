@@ -164,6 +164,36 @@ class LeafParseNode(ParseNode):
     def iterate_spans_with_parents(self):
         return []
 
+class SpanList(object):
+    def __init__(self, tagged_words):
+        # tagged_words is list of (tag, word) tuples
+        self.tagged_words = tagged_words
+        self.list = []
+
+    def add(self, left, right, label):
+        assert isinstance(label, str)
+        self.list.append((left, right, label))
+
+    def convert(self):
+        return self
+
+    def brackets(self, advp_prt=True):
+        location_shift = []
+        i = 0
+        for tag, word in self.tagged_words:
+            location_shift.append(i)
+            if tag not in [",", ".", ":", "``", "''"]:
+                i += 1
+        location_shift.append(i)
+        result = []
+        for left, right, label in self.list:
+            if label == 'TOP':
+                continue
+            if advp_prt and label =='PRT':
+                label = 'ADVP'
+            result.append((location_shift[left], location_shift[right], label))
+        return result
+
 def load_trees(path, strip_top=True):
     with open(path) as infile:
         tokens = infile.read().replace("(", " ( ").replace(")", " ) ").split()
