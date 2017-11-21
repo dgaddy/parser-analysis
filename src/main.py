@@ -143,6 +143,12 @@ def run_train(args):
             predicted, _ = parser.parse(sentence)
             dev_predicted.append(predicted.convert())
 
+        if args.parser_type == 'independent':
+            for pred in dev_predicted:
+                if pred.is_tree():
+                    tree_count += 1
+            print("Percentage of valid trees:", tree_count/len(dev_predicted))
+
         dev_fscore = evaluate.bracket_f1(dev_treebank, dev_predicted)
 
         print(

@@ -194,6 +194,15 @@ class SpanList(object):
             result.append((location_shift[left], location_shift[right], label))
         return result
 
+    def is_tree(self):
+        # crossing brackets
+        n_crossing = 0
+        for left1, right1, label1 in self.list:
+            for left2, right2, label2 in self.list:
+                if left1 < left2 < right1 < right2:
+                    n_crossing += 1
+        return n_crossing == 0
+
 def load_trees(path, strip_top=True):
     with open(path) as infile:
         tokens = infile.read().replace("(", " ( ").replace(")", " ) ").split()
