@@ -138,6 +138,16 @@ class ParserBase(object):
     def from_spec(cls, spec, model):
         return cls(model, **spec)
 
+    def transduce_lstm_batch(self, inputs):
+        # this is a workaround for lstm dropout error in dynet
+        if hasattr(self, 'lstm_initialized'):
+            batch_size = inputs[0].dim()[1]
+            for fb, bb in self.lstm.builder_layers:
+                for b in [fb,bb]:
+                    b.set_dropout_masks(batch_size=batch_size)
+        self.lstm_initialized = True
+        return self.lstm.transduce(inputs)
+
     def get_basic_span_encoding(self, embeddings):
         lstm_outputs = self.lstm.transduce(embeddings)
 
@@ -191,7 +201,7 @@ class ParserBase(object):
             batched_embeddings.append(catted)
         assert batched_embeddings[0].dim()[1] == len(embeddings)-1 # batch dimension is length of sentence + 1
 
-        lstm_outputs = self.lstm.transduce(batched_embeddings)
+        lstm_outputs = self.transduce_lstm_batch(batched_embeddings)
 
         forward_reps = lstm_outputs[distance-1][:self.lstm_dim]
         backward_reps = lstm_outputs[distance][self.lstm_dim:]
@@ -255,7 +265,7 @@ class ParserBase(object):
         span_map = {span:idx for idx, span in enumerate(all_spans)}
 
         all_lstm_inputs = [dy.concatenate_to_batch(items) for items in transpose_lists(all_lstm_inputs)]
-        all_lstm_outputs = self.lstm.transduce(all_lstm_inputs)
+        all_lstm_outputs = self.transduce_lstm_batch(all_lstm_inputs)
 
         @functools.lru_cache(maxsize=None)
         def span_encoding(left, right):
@@ -320,8 +330,6 @@ class ParserBase(object):
             self.lstm.disable_dropout()
 
         embeddings = self.get_embeddings(sentence, is_train)
-
-        self.lstm.transduce([embeddings[0]]) # this sets the lstm dropout mask to batch size 1, which works around a dynet problem with different batch sizes
 
         if self.lstm_type == 'truncated':
             span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size, self.concat_bow)
@@ -547,7 +555,8 @@ class ChartParser(ParserBase):
             correct = tree.convert().linearize() == gold.convert().linearize()
             loss_expr = dy.zeros(1) if correct else score_expr - oracle_score_expr
             loss = 0 if correct else score - oracle_score
-            return tree, loss_expr
+            augmentation = loss - loss_expr.value()
+            return tree, loss_expr + augmentation
         else:
             return tree, score_expr
 
