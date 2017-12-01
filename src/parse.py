@@ -73,9 +73,13 @@ class ParserBase(object):
             self,
             model,
             tag_vocab,
+            char_vocab,
             word_vocab,
             label_vocab,
             tag_embedding_dim,
+            char_embedding_dim,
+            char_lstm_layers,
+            char_lstm_dim,
             word_embedding_dim,
             lstm_layers,
             lstm_dim,
@@ -94,23 +98,37 @@ class ParserBase(object):
         self.model = model.add_subcollection("Parser")
         self.trainable_parameters = self.model.add_subcollection("Trainable")
         self.tag_vocab = tag_vocab
+        self.char_vocab = char_vocab
         self.word_vocab = word_vocab
         self.label_vocab = label_vocab
+        self.char_lstm_dim = char_lstm_dim
         self.lstm_dim = lstm_dim
 
         emb_model = self.model if random_emb else self.trainable_parameters
         self.tag_embeddings = emb_model.add_lookup_parameters(
             (tag_vocab.size, tag_embedding_dim), name="tag-embeddings")
+        self.char_embeddings = emb_model.add_lookup_parameters(
+            (char_vocab.size, char_embedding_dim), name="char-embeddings")
         self.word_embeddings = emb_model.add_lookup_parameters(
             (word_vocab.size, word_embedding_dim), name="word-embeddings")
 
+        self.char_lstm = dy.BiRNNBuilder(
+            char_lstm_layers,
+            char_embedding_dim,
+            2 * char_lstm_dim,
+            self.trainable_parameters,
+            dy.VanillaLSTMBuilder)
+
+        for c in embedding_type:
+            assert c in 'wtc'
         self.embedding_type = embedding_type
-        if embedding_type == 'both':
-            emb_dim = tag_embedding_dim + word_embedding_dim
-        elif embedding_type == 'word':
-            emb_dim = word_embedding_dim
-        elif embedding_type == 'tag':
-            emb_dim = tag_embedding_dim
+        emb_dim = 0
+        if 'w' in embedding_type:
+            emb_dim += word_embedding_dim
+        if 't' in embedding_type:
+            emb_dim += tag_embedding_dim
+        if 'c' in embedding_type:
+            emb_dim += 2*char_lstm_dim
 
         self.lstm = dy.BiRNNBuilder(
             lstm_layers,
@@ -309,24 +327,35 @@ class ParserBase(object):
     def get_embeddings(self, sentence, is_train=False):
         embeddings = []
         for tag, word in [(START, START)] + sentence + [(STOP, STOP)]:
-            tag_embedding = self.tag_embeddings[self.tag_vocab.index(tag)]
-            if word not in (START, STOP):
-                count = self.word_vocab.count(word)
-                if not count or (is_train and np.random.rand() < 1 / (1 + count)):
-                    word = UNK
-            word_embedding = self.word_embeddings[self.word_vocab.index(word)]
-            if self.embedding_type == 'both':
-                embeddings.append(dy.concatenate([tag_embedding, word_embedding]))
-            elif self.embedding_type == 'word':
-                embeddings.append(word_embedding)
-            elif self.embedding_type == 'tag':
-                embeddings.append(tag_embedding)
+            embed = []
+            if 't' in self.embedding_type:
+                tag_embedding = self.tag_embeddings[self.tag_vocab.index(tag)]
+                embed.append(tag_embedding)
+            if 'c' in self.embedding_type:
+                chars = list(word) if word not in (START, STOP) else [word]
+                char_lstm_outputs = self.char_lstm.transduce([
+                    self.char_embeddings[self.char_vocab.index(char)]
+                    for char in [START] + chars + [STOP]])
+                char_encoding = dy.concatenate([
+                    char_lstm_outputs[-1][:self.char_lstm_dim],
+                    char_lstm_outputs[0][self.char_lstm_dim:]])
+                embed.append(char_encoding)
+            if 'w' in self.embedding_type:
+                if word not in (START, STOP):
+                    count = self.word_vocab.count(word)
+                    if not count or (is_train and np.random.rand() < 1 / (1 + count)):
+                        word = UNK
+                word_embedding = self.word_embeddings[self.word_vocab.index(word)]
+                embed.append(word_embedding)
+            embeddings.append(dy.concatenate(embed))
         return embeddings
 
     def get_representation_function(self, sentence, is_train):
         if is_train:
+            self.char_lstm.set_dropout(self.dropout)
             self.lstm.set_dropout(self.dropout)
         else:
+            self.char_lstm.disable_dropout()
             self.lstm.disable_dropout()
 
         embeddings = self.get_embeddings(sentence, is_train)

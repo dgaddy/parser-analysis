@@ -46,6 +46,10 @@ def run_train(args):
     tag_vocab.index(parse.START)
     tag_vocab.index(parse.STOP)
 
+    char_vocab = vocabulary.Vocabulary()
+    char_vocab.index(parse.START)
+    char_vocab.index(parse.STOP)
+
     word_vocab = vocabulary.Vocabulary()
     word_vocab.index(parse.START)
     word_vocab.index(parse.STOP)
@@ -64,8 +68,11 @@ def run_train(args):
             else:
                 tag_vocab.index(node.tag)
                 word_vocab.index(node.word)
+                for char in node.word:
+                    char_vocab.index(char)
 
     tag_vocab.freeze()
+    char_vocab.freeze()
     word_vocab.freeze()
     label_vocab.freeze()
 
@@ -79,6 +86,7 @@ def run_train(args):
     if args.print_vocabs:
         print_vocabulary("Tag", tag_vocab)
         print_vocabulary("Word", word_vocab)
+        print_vocabulary("Character", char_vocab)
         print_vocabulary("Label", label_vocab)
 
     print("Initializing model...")
@@ -86,9 +94,13 @@ def run_train(args):
     print("Input LSTM type:", args.lstm_type)
     span_representation_args = [
         tag_vocab,
+        char_vocab,
         word_vocab,
         label_vocab,
         args.tag_embedding_dim,
+        args.char_embedding_dim,
+        args.char_lstm_layers,
+        args.char_lstm_dim,
         args.word_embedding_dim,
         args.lstm_layers,
         args.lstm_dim,
@@ -366,6 +378,9 @@ def main():
     subparser.add_argument("--numpy-seed", type=int)
     subparser.add_argument("--parser-type", choices=["top-down", "chart", "independent"], required=True)
     subparser.add_argument("--tag-embedding-dim", type=int, default=50)
+    subparser.add_argument("--char-embedding-dim", type=int, default=50)
+    subparser.add_argument("--char-lstm-layers", type=int, default=2)
+    subparser.add_argument("--char-lstm-dim", type=int, default=250)
     subparser.add_argument("--word-embedding-dim", type=int, default=100)
     subparser.add_argument("--lstm-layers", type=int, default=2)
     subparser.add_argument("--lstm-dim", type=int, default=250)
@@ -383,7 +398,7 @@ def main():
     subparser.add_argument("--print-vocabs", action="store_true")
     subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside"], default="basic")
     subparser.add_argument("--lstm-context-size", type=int, default=3)
-    subparser.add_argument("--embedding-type", choices=["word","tag","both"], default="both")
+    subparser.add_argument("--embedding-type", default="wc") # characters w/t/c for word/tag/character
     subparser.add_argument("--random-embeddings", action="store_true")
     subparser.add_argument("--random-lstm", action="store_true")
     subparser.add_argument("--concat-bow", action="store_true")
