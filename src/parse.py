@@ -243,57 +243,25 @@ class ParserBase(object):
 
         return span_encoding
 
-    def get_shuffled_span_encoding(self, embeddings, distance):
-        all_spans = []
-        all_lstm_outputs = []
-        for i in range(len(embeddings)-2):
-            for j in range(i+1,len(embeddings)-1):
-                all_spans.append((i,j))
-                lstm_inputs = embeddings[:] # copy
-                shuffle(lstm_inputs, 1, i-distance+1) # note not shuffling start/end padding
-                shuffle(lstm_inputs, i+distance+1, j-distance+1)
-                shuffle(lstm_inputs, j+distance+1, len(embeddings)-1)
-                all_lstm_outputs.append(self.lstm.transduce(lstm_inputs))
-        span_map = {span:idx for idx, span in enumerate(all_spans)}
-
-        @functools.lru_cache(maxsize=None)
-        def span_encoding(left, right):
-            lstm_outputs = all_lstm_outputs[span_map[(left,right)]]
-            forward = (
-                lstm_outputs[right][:self.lstm_dim] -
-                lstm_outputs[left][:self.lstm_dim])
-            backward = (
-                lstm_outputs[left + 1][self.lstm_dim:] -
-                lstm_outputs[right + 1][self.lstm_dim:])
-            return dy.concatenate([forward, backward])
-
-        return span_encoding
-
     def get_shuffled_span_encoding_batch(self, embeddings, distance):
-        all_spans = []
         all_lstm_inputs = []
-        for i in range(len(embeddings)-2):
-            for j in range(i+1,len(embeddings)-1):
-                all_spans.append((i,j))
-                lstm_inputs = embeddings[:] # copy
-                shuffle(lstm_inputs, 1, i-distance+1) # note not shuffling start/end padding
-                shuffle(lstm_inputs, i+distance+1, j-distance+1)
-                shuffle(lstm_inputs, j+distance+1, len(embeddings)-1)
-                all_lstm_inputs.append(lstm_inputs)
-        span_map = {span:idx for idx, span in enumerate(all_spans)}
+        for i in range(len(embeddings)-1):
+            lstm_inputs = embeddings[:] # copy
+            shuffle(lstm_inputs, 1, i-distance+1) # note not shuffling start/end padding
+            shuffle(lstm_inputs, i+distance+1, len(embeddings)-1)
+            all_lstm_inputs.append(lstm_inputs)
 
         all_lstm_inputs = [dy.concatenate_to_batch(items) for items in transpose_lists(all_lstm_inputs)]
         all_lstm_outputs = self.transduce_lstm_batch(all_lstm_inputs)
 
         @functools.lru_cache(maxsize=None)
         def span_encoding(left, right):
-            batch_index = span_map[(left,right)]
             forward = (
-                dy.pick_batch_elem(all_lstm_outputs[right], batch_index)[:self.lstm_dim] -
-                dy.pick_batch_elem(all_lstm_outputs[left], batch_index)[:self.lstm_dim])
+                dy.pick_batch_elem(all_lstm_outputs[right], right)[:self.lstm_dim] -
+                dy.pick_batch_elem(all_lstm_outputs[left], left)[:self.lstm_dim])
             backward = (
-                dy.pick_batch_elem(all_lstm_outputs[left + 1], batch_index)[self.lstm_dim:] -
-                dy.pick_batch_elem(all_lstm_outputs[right + 1], batch_index)[self.lstm_dim:])
+                dy.pick_batch_elem(all_lstm_outputs[left + 1], left)[self.lstm_dim:] -
+                dy.pick_batch_elem(all_lstm_outputs[right + 1], right)[self.lstm_dim:])
             return dy.concatenate([forward, backward])
 
         return span_encoding
