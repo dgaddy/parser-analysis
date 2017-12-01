@@ -37,6 +37,23 @@ def bow_range(items, start, end):
     else:
         return dy.average(items[start:end]) # or esum
 
+def weighted_bow_range(items, start, end, params, location):
+    if end <= start:
+        return dy.zeros(*items[0].dim())
+    else:
+        selected_items = items[start:end]
+        n = len(selected_items)
+        selected_params = params[:n]
+        assert location in ['left','right','middle']
+        if location == 'left': # reverse weights to left
+            selected_params = reversed(selected_params)
+        elif location == 'middle' and n > 1: # mirror weights in middle
+            first_half = selected_params[:n//2]
+            selected_params[-(n//2):] = reversed(first_half)
+            assert len(selected_params) == len(selected_items)
+        weighted_items = [i*dy.parameter(p) for i, p in zip(selected_items, selected_params)]
+        return dy.average(weighted_items)
+
 class Feedforward(object):
     def __init__(self, model, input_dim, hidden_dims, output_dim):
         self.spec = locals()
@@ -142,6 +159,7 @@ class ParserBase(object):
         output_dim = 2 * lstm_dim
         if concat_bow:
             output_dim += 3 * emb_dim
+            self.bow_weights = [self.trainable_parameters.add_parameters(1) for i in range(300)]
         self.span_representation_dimension = output_dim
 
         self.dropout = dropout
@@ -181,35 +199,6 @@ class ParserBase(object):
 
         return span_encoding
 
-    def get_truncated_span_encoding(self, embeddings, distance, concat_bow=False):
-        padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
-        forward_reps = []
-        backward_reps = []
-        for i in range(len(embeddings)-1):
-            lstm_inputs = padded_embeddings[i:i+distance*2]
-            lstm_outputs = self.lstm.transduce(lstm_inputs)
-            forward_reps.append(lstm_outputs[distance-1][:self.lstm_dim])
-            backward_reps.append(lstm_outputs[distance][self.lstm_dim:])
-
-        @functools.lru_cache(maxsize=None)
-        def span_encoding(left, right):
-            forward = (
-                forward_reps[right] -
-                forward_reps[left])
-            backward = (
-                backward_reps[left] -
-                backward_reps[right])
-
-            if concat_bow:
-                bow_before = bow_range(embeddings, 1, left-distance+1)
-                bow_inside = bow_range(embeddings, left+distance+1, right-distance+1)
-                bow_after = bow_range(embeddings, right+distance+1, len(embeddings)-1)
-                return dy.concatenate([forward, backward, bow_before, bow_inside, bow_after])
-            else:
-                return dy.concatenate([forward, backward])
-
-        return span_encoding
-
     def get_truncated_span_encoding_batch(self, embeddings, distance, concat_bow=False):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
@@ -234,9 +223,12 @@ class ParserBase(object):
                 dy.pick_batch_elem(backward_reps, right))
 
             if concat_bow:
-                bow_before = bow_range(embeddings, 1, left-distance+1)
-                bow_inside = bow_range(embeddings, left+distance+1, right-distance+1)
-                bow_after = bow_range(embeddings, right+distance+1, len(embeddings)-1)
+                bow_before = weighted_bow_range(embeddings, 1, left-distance+1,
+                        self.bow_weights, 'left')
+                bow_inside = weighted_bow_range(embeddings, left+distance+1, right-distance+1,
+                        self.bow_weights, 'middle')
+                bow_after = weighted_bow_range(embeddings, right+distance+1, len(embeddings)-1,
+                        self.bow_weights, 'right')
                 return dy.concatenate([forward, backward, bow_before, bow_inside, bow_after])
             else:
                 return dy.concatenate([forward, backward])
