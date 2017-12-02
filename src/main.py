@@ -92,6 +92,7 @@ def run_train(args):
     print("Initializing model...")
     model = dy.ParameterCollection()
     print("Input LSTM type:", args.lstm_type)
+    assert args.embedding_type != ""
     span_representation_args = [
         tag_vocab,
         char_vocab,
@@ -109,6 +110,7 @@ def run_train(args):
         args.lstm_context_size,
         args.embedding_type,
         args.concat_bow,
+        args.weight_bow,
         args.random_embeddings,
         args.random_lstm,
     ]
@@ -151,7 +153,6 @@ def run_train(args):
         dev_predicted = []
         for tree in dev_treebank:
             dy.renew_cg()
-            parser.new_batch()
             sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
             predicted, _ = parser.parse(sentence)
             dev_predicted.append(predicted.convert())
@@ -252,7 +253,6 @@ def run_test(args):
     test_predicted = []
     for tree in test_treebank:
         dy.renew_cg()
-        parser.new_batch()
         sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
         predicted, _ = parser.parse(sentence)
         test_predicted.append(predicted.convert())
@@ -405,6 +405,7 @@ def main():
     subparser.add_argument("--random-embeddings", action="store_true")
     subparser.add_argument("--random-lstm", action="store_true")
     subparser.add_argument("--concat-bow", action="store_true")
+    subparser.add_argument("--weight-bow", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
     train_subparser = subparser
 

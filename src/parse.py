@@ -105,6 +105,7 @@ class ParserBase(object):
             lstm_context_size,
             embedding_type,
             concat_bow,
+            weight_bow,
             random_emb,
             random_lstm,
     ):
@@ -156,10 +157,12 @@ class ParserBase(object):
 
         assert not (concat_bow and not lstm_type == 'truncated'), 'concat-bow only supported with truncated lstm-type'
         self.concat_bow = concat_bow
+        self.weight_bow = weight_bow
         output_dim = 2 * lstm_dim
         if concat_bow:
             output_dim += 3 * emb_dim
-            self.bow_weights = [self.trainable_parameters.add_parameters(1) for i in range(300)]
+            if weight_bow:
+                self.bow_weights = [self.trainable_parameters.add_parameters(1) for i in range(300)]
         self.span_representation_dimension = output_dim
 
         self.dropout = dropout
@@ -204,7 +207,7 @@ class ParserBase(object):
 
         return span_encoding
 
-    def get_truncated_span_encoding_batch(self, embeddings, distance, concat_bow=False):
+    def get_truncated_span_encoding_batch(self, embeddings, distance, concat_bow, weight_bow):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
         for i in range(distance*2):
@@ -228,12 +231,17 @@ class ParserBase(object):
                 dy.pick_batch_elem(backward_reps, right))
 
             if concat_bow:
-                bow_before = weighted_bow_range(embeddings, 1, left-distance+1,
-                        self.bow_weights, 'left')
-                bow_inside = weighted_bow_range(embeddings, left+distance+1, right-distance+1,
-                        self.bow_weights, 'middle')
-                bow_after = weighted_bow_range(embeddings, right+distance+1, len(embeddings)-1,
-                        self.bow_weights, 'right')
+                if weight_bow:
+                    bow_before = weighted_bow_range(embeddings, 1, left-distance+1,
+                            self.bow_weights, 'left')
+                    bow_inside = weighted_bow_range(embeddings, left+distance+1, right-distance+1,
+                            self.bow_weights, 'middle')
+                    bow_after = weighted_bow_range(embeddings, right+distance+1, len(embeddings)-1,
+                            self.bow_weights, 'right')
+                else:
+                    bow_before = bow_range(embeddings, 1, left-distance+1)
+                    bow_inside = bow_range(embeddings, left+distance+1, right-distance+1)
+                    bow_after = bow_range(embeddings, right+distance+1, len(embeddings)-1)
                 return dy.concatenate([forward, backward, bow_before, bow_inside, bow_after])
             else:
                 return dy.concatenate([forward, backward])
@@ -330,7 +338,7 @@ class ParserBase(object):
         embeddings = self.get_embeddings(sentence, is_train)
 
         if self.lstm_type == 'truncated':
-            span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size, self.concat_bow)
+            span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size, self.concat_bow, self.weight_bow)
         elif self.lstm_type == 'shuffled':
             span_encoding = self.get_shuffled_span_encoding_batch(embeddings, self.lstm_context_size)
         elif self.lstm_type == 'inside':
