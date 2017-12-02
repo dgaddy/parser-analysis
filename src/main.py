@@ -151,6 +151,7 @@ def run_train(args):
         dev_predicted = []
         for tree in dev_treebank:
             dy.renew_cg()
+            parser.new_batch()
             sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
             predicted, _ = parser.parse(sentence)
             dev_predicted.append(predicted.convert())
@@ -196,6 +197,7 @@ def run_train(args):
 
         for start_index in range(0, len(train_parse), args.batch_size):
             dy.renew_cg()
+            parser.new_batch()
             batch_losses = []
             for tree in train_parse[start_index:start_index + args.batch_size]:
                 sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
@@ -250,6 +252,7 @@ def run_test(args):
     test_predicted = []
     for tree in test_treebank:
         dy.renew_cg()
+        parser.new_batch()
         sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
         predicted, _ = parser.parse(sentence)
         test_predicted.append(predicted.convert())

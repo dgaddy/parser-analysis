@@ -122,19 +122,6 @@ class ParserBase(object):
         self.lstm_dim = lstm_dim
 
         emb_model = self.model if random_emb else self.trainable_parameters
-        self.tag_embeddings = emb_model.add_lookup_parameters(
-            (tag_vocab.size, tag_embedding_dim), name="tag-embeddings")
-        self.char_embeddings = emb_model.add_lookup_parameters(
-            (char_vocab.size, char_embedding_dim), name="char-embeddings")
-        self.word_embeddings = emb_model.add_lookup_parameters(
-            (word_vocab.size, word_embedding_dim), name="word-embeddings")
-
-        self.char_lstm = dy.BiRNNBuilder(
-            char_lstm_layers,
-            char_embedding_dim,
-            2 * char_lstm_dim,
-            self.trainable_parameters,
-            dy.VanillaLSTMBuilder)
 
         for c in embedding_type:
             assert c in 'wtc'
@@ -142,10 +129,23 @@ class ParserBase(object):
         emb_dim = 0
         if 'w' in embedding_type:
             emb_dim += word_embedding_dim
+            self.word_embeddings = emb_model.add_lookup_parameters(
+                (word_vocab.size, word_embedding_dim), name="word-embeddings")
         if 't' in embedding_type:
             emb_dim += tag_embedding_dim
+            self.tag_embeddings = emb_model.add_lookup_parameters(
+                (tag_vocab.size, tag_embedding_dim), name="tag-embeddings")
         if 'c' in embedding_type:
             emb_dim += 2*char_lstm_dim
+            self.char_embeddings = emb_model.add_lookup_parameters(
+                (char_vocab.size, char_embedding_dim), name="char-embeddings")
+
+            self.char_lstm = dy.BiRNNBuilder(
+                char_lstm_layers,
+                char_embedding_dim,
+                2 * char_lstm_dim,
+                self.trainable_parameters,
+                dy.VanillaLSTMBuilder)
 
         self.lstm = dy.BiRNNBuilder(
             lstm_layers,
@@ -167,6 +167,8 @@ class ParserBase(object):
         self.lstm_type = lstm_type
         self.lstm_context_size = lstm_context_size
 
+        self.lstm_initialized = False
+
     def param_collection(self):
         return self.model
 
@@ -174,9 +176,12 @@ class ParserBase(object):
     def from_spec(cls, spec, model):
         return cls(model, **spec)
 
+    def new_batch(self):
+        self.lstm_initialized = False
+
     def transduce_lstm_batch(self, inputs):
         # this is a workaround for lstm dropout error in dynet
-        if hasattr(self, 'lstm_initialized'):
+        if self.lstm_initialized:
             batch_size = inputs[0].dim()[1]
             for fb, bb in self.lstm.builder_layers:
                 for b in [fb,bb]:
@@ -312,11 +317,15 @@ class ParserBase(object):
 
     def get_representation_function(self, sentence, is_train):
         if is_train:
-            self.char_lstm.set_dropout(self.dropout)
             self.lstm.set_dropout(self.dropout)
         else:
-            self.char_lstm.disable_dropout()
             self.lstm.disable_dropout()
+        if 'c' in self.embedding_type:
+            if is_train:
+                self.char_lstm.set_dropout(self.dropout)
+            else:
+                self.char_lstm.disable_dropout()
+
 
         embeddings = self.get_embeddings(sentence, is_train)
 
