@@ -56,7 +56,7 @@ def weighted_bow_range(items, start, end, params, location):
         return dy.average(weighted_items)
 
 class Feedforward(object):
-    def __init__(self, model, input_dim, hidden_dims, output_dim):
+    def __init__(self, model, input_dim, hidden_dims, output_dim, dropout=0):
         self.spec = locals()
         self.spec.pop("self")
         self.spec.pop("model")
@@ -69,6 +69,8 @@ class Feedforward(object):
         for prev_dim, next_dim in zip(dims, dims[1:]):
             self.weights.append(self.model.add_parameters((next_dim, prev_dim)))
             self.biases.append(self.model.add_parameters(next_dim))
+
+        self.dropout = dropout
 
     def param_collection(self):
         return self.model
@@ -84,6 +86,7 @@ class Feedforward(object):
             x = dy.affine_transform([bias, weight, x])
             if i < len(self.weights) - 1:
                 x = dy.rectify(x)
+            x = dy.dropout(x, self.dropout)
         return x
 
 class ParserBase(object):
@@ -110,6 +113,7 @@ class ParserBase(object):
             random_emb,
             random_lstm,
             common_word_threshold,
+            no_lstm_hidden_dims,
     ):
         self.spec = locals()
         self.spec.pop("self")
@@ -150,12 +154,17 @@ class ParserBase(object):
                 self.trainable_parameters,
                 dy.VanillaLSTMBuilder)
 
-        self.lstm = dy.BiRNNBuilder(
-            lstm_layers,
-            emb_dim,
-            2 * lstm_dim,
-            self.model if random_lstm else self.trainable_parameters,
-            dy.VanillaLSTMBuilder)
+        if lstm_type == "no-lstm":
+            self.context_network = Feedforward(
+                self.model if random_lstm else self.trainable_parameters,
+                emb_dim*2*lstm_context_size, no_lstm_hidden_dims, 2*lstm_dim, dropout)
+        else:
+            self.lstm = dy.BiRNNBuilder(
+                lstm_layers,
+                emb_dim,
+                2 * lstm_dim,
+                self.model if random_lstm else self.trainable_parameters,
+                dy.VanillaLSTMBuilder)
 
         assert not (concat_bow and not lstm_type == 'truncated'), 'concat-bow only supported with truncated lstm-type'
         self.concat_bow = concat_bow
@@ -211,7 +220,7 @@ class ParserBase(object):
 
         return span_encoding
 
-    def get_truncated_span_encoding_batch(self, embeddings, distance, concat_bow, weight_bow):
+    def get_truncated_span_encoding(self, embeddings, distance, concat_bow, weight_bow):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
         for i in range(distance*2):
@@ -252,7 +261,25 @@ class ParserBase(object):
 
         return span_encoding
 
-    def get_shuffled_span_encoding_batch(self, embeddings, distance):
+    def get_truncated_no_lstm_span_encoding(self, embeddings, distance):
+        padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
+        batched_embeddings = []
+        for i in range(distance*2):
+            selected = padded_embeddings[i:len(padded_embeddings)-(distance*2)+i+1]
+            catted = dy.concatenate_to_batch(selected)
+            batched_embeddings.append(catted)
+        assert batched_embeddings[0].dim()[1] == len(embeddings)-1 # batch dimension is length of sentence + 1
+
+        context_outputs = self.context_network(dy.concatenate(batched_embeddings))
+
+        @functools.lru_cache(maxsize=None)
+        def span_encoding(left, right):
+            return dy.pick_batch_elem(context_outputs, right) - \
+                   dy.pick_batch_elem(context_outputs, left)
+
+        return span_encoding
+
+    def get_shuffled_span_encoding(self, embeddings, distance):
         all_lstm_inputs = []
         for i in range(len(embeddings)-1):
             lstm_inputs = embeddings[:] # copy
@@ -334,10 +361,11 @@ class ParserBase(object):
         return embeddings
 
     def get_representation_function(self, sentence, is_train):
-        if is_train:
-            self.lstm.set_dropout(self.dropout)
-        else:
-            self.lstm.disable_dropout()
+        if self.lstm_type != "no-lstm":
+            if is_train:
+                self.lstm.set_dropout(self.dropout)
+            else:
+                self.lstm.disable_dropout()
         if 'c' in self.embedding_type:
             if is_train:
                 self.char_lstm.set_dropout(self.dropout)
@@ -348,9 +376,11 @@ class ParserBase(object):
         embeddings = self.get_embeddings(sentence, is_train)
 
         if self.lstm_type == 'truncated':
-            span_encoding = self.get_truncated_span_encoding_batch(embeddings, self.lstm_context_size, self.concat_bow, self.weight_bow)
+            span_encoding = self.get_truncated_span_encoding(embeddings, self.lstm_context_size, self.concat_bow, self.weight_bow)
+        elif self.lstm_type == 'no-lstm':
+            span_encoding = self.get_truncated_no_lstm_span_encoding(embeddings, self.lstm_context_size)
         elif self.lstm_type == 'shuffled':
-            span_encoding = self.get_shuffled_span_encoding_batch(embeddings, self.lstm_context_size)
+            span_encoding = self.get_shuffled_span_encoding(embeddings, self.lstm_context_size)
         elif self.lstm_type == 'inside':
             span_encoding = self.get_inside_span_encoding(embeddings, self.lstm_context_size)
         else:

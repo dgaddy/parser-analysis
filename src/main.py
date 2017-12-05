@@ -116,6 +116,7 @@ def run_train(args):
         args.random_embeddings,
         args.random_lstm,
         args.common_word_threshold,
+        args.no_lstm_hidden_dims,
     ]
  
     if args.parser_type == "top-down":
@@ -402,7 +403,7 @@ def main():
     subparser.add_argument("--epochs", type=int)
     subparser.add_argument("--checks-per-epoch", type=int, default=4)
     subparser.add_argument("--print-vocabs", action="store_true")
-    subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside"], default="basic")
+    subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside","no-lstm"], default="basic")
     subparser.add_argument("--lstm-context-size", type=int, default=3)
     subparser.add_argument("--embedding-type", default="wc") # characters w/t/c for word/tag/character
     subparser.add_argument("--random-embeddings", action="store_true")
@@ -411,6 +412,7 @@ def main():
     subparser.add_argument("--weight-bow", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
     subparser.add_argument("--common-word-threshold", type=int, default=float('inf')) # replace tags and character-level inputs with a special token above this threshold
+    subparser.add_argument("--no-lstm-hidden-dims", type=int, nargs="+", default=[250])
     train_subparser = subparser
 
     subparser = subparsers.add_parser("train-label", parents=[train_subparser], add_help=False)
