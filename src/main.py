@@ -162,6 +162,7 @@ def run_train(args):
             dev_predicted.append(predicted.convert())
 
         if args.parser_type == 'independent':
+            tree_count = 0
             for pred in dev_predicted:
                 if pred.is_tree():
                     tree_count += 1
