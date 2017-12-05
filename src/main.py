@@ -45,10 +45,12 @@ def run_train(args):
     tag_vocab = vocabulary.Vocabulary()
     tag_vocab.index(parse.START)
     tag_vocab.index(parse.STOP)
+    tag_vocab.index(parse.COMMON_WORD)
 
     char_vocab = vocabulary.Vocabulary()
     char_vocab.index(parse.START)
     char_vocab.index(parse.STOP)
+    char_vocab.index(parse.COMMON_WORD)
 
     word_vocab = vocabulary.Vocabulary()
     word_vocab.index(parse.START)
@@ -113,6 +115,7 @@ def run_train(args):
         args.weight_bow,
         args.random_embeddings,
         args.random_lstm,
+        args.common_word_threshold,
     ]
  
     if args.parser_type == "top-down":
@@ -407,6 +410,7 @@ def main():
     subparser.add_argument("--concat-bow", action="store_true")
     subparser.add_argument("--weight-bow", action="store_true")
     subparser.add_argument("--print-frequency", type=int, default=1)
+    subparser.add_argument("--common-word-threshold", type=int, default=float('inf')) # replace tags and character-level inputs with a special token above this threshold
     train_subparser = subparser
 
     subparser = subparsers.add_parser("train-label", parents=[train_subparser], add_help=False)

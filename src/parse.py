@@ -9,6 +9,7 @@ import trees
 START = "<START>"
 STOP = "<STOP>"
 UNK = "<UNK>"
+COMMON_WORD = "<COMMON_WORD>"
 
 def augment(scores, oracle_index):
     assert isinstance(scores, dy.Expression)
@@ -108,6 +109,7 @@ class ParserBase(object):
             weight_bow,
             random_emb,
             random_lstm,
+            common_word_threshold,
     ):
         self.spec = locals()
         self.spec.pop("self")
@@ -171,6 +173,8 @@ class ParserBase(object):
         self.lstm_context_size = lstm_context_size
 
         self.lstm_initialized = False
+
+        self.common_word_threshold = common_word_threshold
 
     def param_collection(self):
         return self.model
@@ -301,11 +305,17 @@ class ParserBase(object):
         embeddings = []
         for tag, word in [(START, START)] + sentence + [(STOP, STOP)]:
             embed = []
+            is_common_word = word not in (START,STOP) and \
+                             self.word_vocab.count(word) > self.common_word_threshold
             if 't' in self.embedding_type:
+                if is_common_word:
+                    tag = COMMON_WORD
                 tag_embedding = self.tag_embeddings[self.tag_vocab.index(tag)]
                 embed.append(tag_embedding)
             if 'c' in self.embedding_type:
                 chars = list(word) if word not in (START, STOP) else [word]
+                if is_common_word:
+                    chars = [COMMON_WORD]
                 char_lstm_outputs = self.char_lstm.transduce([
                     self.char_embeddings[self.char_vocab.index(char)]
                     for char in [START] + chars + [STOP]])
