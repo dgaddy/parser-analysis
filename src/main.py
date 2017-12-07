@@ -306,33 +306,35 @@ def predict_labels(args):
 
     print("Loading model from {}...".format(args.model_path_base))
     model = dy.ParameterCollection()
-    [parser] = dy.load(args.model_path_base, model)
-    parser.refresh_label_net()
+    [base_parser] = dy.load(args.model_path_base, model)
+    parser = parse.LabelPrediction(model, base_parser, args.label_hidden_dim)
     trainer = dy.AdamTrainer(parser.f_label.model)
 
-    for epoch_index in range(1000):
-        np.random.shuffle(train_parse)
-        for start_index in range(0, len(train_parse), args.batch_size):
-            dy.renew_cg()
-            batch_losses = []
-            for tree in train_parse[start_index:start_index + args.batch_size]:
-                sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
-                loss, _, _ = parser.predict_parent_label_for_spans(sentence, tree)
-                batch_losses.append(loss)
-            batch_loss = dy.average(batch_losses)
-            batch_loss_value = batch_loss.scalar_value()
-            batch_loss.backward()
-            trainer.update()
+    for self_not_parent in [False, True]:
+        print('predicting own label' if self_not_parent else 'predicting parent label')
+        for epoch_index in range(10):
+            np.random.shuffle(train_parse)
+            for start_index in range(0, len(train_parse), args.batch_size):
+                dy.renew_cg()
+                batch_losses = []
+                for tree in train_parse[start_index:start_index + args.batch_size]:
+                    sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
+                    loss, _, _ = parser.predict_parent_label_for_spans(sentence, tree, self_not_parent)
+                    batch_losses.append(loss)
+                batch_loss = dy.average(batch_losses)
+                batch_loss_value = batch_loss.scalar_value()
+                batch_loss.backward()
+                trainer.update()
 
-        correct = 0
-        total = 0
-        for tree in dev_parse:
-            dy.renew_cg()
-            sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
-            _, c, t = parser.predict_parent_label_for_spans(sentence, tree)
-            correct += c
-            total += t
-        print("dev score at epoch", epoch_index+1, ":", correct/total)
+            correct = 0
+            total = 0
+            for tree in dev_parse:
+                dy.renew_cg()
+                sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
+                _, c, t = parser.predict_parent_label_for_spans(sentence, tree)
+                correct += c
+                total += t
+            print("dev score at epoch", epoch_index+1, ":", correct/total)
 
 def derivative_analysis(args):
     print("Loading development trees from {}...".format(args.dev_path))

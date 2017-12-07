@@ -668,25 +668,17 @@ class LabelPrediction(ParserBase):
     def __init__(
             self,
             model,
+            parser,
             label_hidden_dim,
-            *span_representation_args
     ):
-        super().__init__(*span_representation_args)
 
-        self.spec = locals()
-        self.spec.pop("self")
-        self.spec.pop("model")
-
+        self.parser = parser
         self.label_hidden_dim = label_hidden_dim
         self.f_label = Feedforward(
-            self.trainable_parameters, self.span_representation_dimension, [label_hidden_dim], label_vocab.size)
+            model, parser.span_representation_dimension, [label_hidden_dim], parser.label_vocab.size)
 
-    def refresh_label_net(self):
-        self.f_label = Feedforward(self.trainable_parameters,
-                self.span_representation_dimension, [self.label_hidden_dim], self.label_vocab.size)
-
-    def predict_parent_label_for_spans(self, sentence, gold):
-        span_encoding = self.get_span_representation_function(sentence, is_train=False)
+    def predict_parent_label_for_spans(self, sentence, gold, self_not_parent=False):
+        span_encoding = self.parser.get_representation_function(sentence, is_train=False)
 
         correct = 0
         total = 0
@@ -712,8 +704,11 @@ class LabelPrediction(ParserBase):
             total_loss = total_loss + label_loss
 
         for node, parent in gold.iterate_spans_with_parents(): # doesn't include top level
-            parent_label_index = self.label_vocab.index(parent.label)
-            accumulate(node.left, node.right, parent_label_index)
-        accumulate(gold.left, gold.right, 0) # 0 is no-label index, since top has no parent label
+            label = node.label if self_not_parent else parent.label
+            label_index = self.parser.label_vocab.index(label)
+            accumulate(node.left, node.right, label_index)
+        label = gold.label if self_not_parent else () # () represents no-label, since root has no parent
+        label_index = self.parser.label_vocab.index(label)
+        accumulate(gold.left, gold.right, label_index)
 
         return total_loss, correct, total
