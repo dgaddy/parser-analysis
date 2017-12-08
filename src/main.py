@@ -406,7 +406,7 @@ def main():
     subparser.add_argument("--epochs", type=int)
     subparser.add_argument("--checks-per-epoch", type=int, default=4)
     subparser.add_argument("--print-vocabs", action="store_true")
-    subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside","no-lstm"], default="basic")
+    subparser.add_argument("--lstm-type", choices=["basic","truncated","shuffled","inside","no-lstm","untied-truncated"], default="basic")
     subparser.add_argument("--lstm-context-size", type=int, default=3)
     subparser.add_argument("--embedding-type", default="wc") # characters w/t/c for word/tag/character
     subparser.add_argument("--random-embeddings", action="store_true")

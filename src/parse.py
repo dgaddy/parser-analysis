@@ -89,6 +89,91 @@ class Feedforward(object):
             x = dy.dropout(x, self.dropout)
         return x
 
+class UntiedLSTMLayer(object):
+    def __init__(self, model, in_size, hidden_size, length, dropout=0.0):
+        self.model = model.add_subcollection("UntiedLSTM")
+
+        self.in_size = in_size
+        self.hidden_size = hidden_size
+        self.length = length
+        self.dropout = dropout
+
+        self.Wxs = [self.model.add_parameters((4*hidden_size,in_size)) for _ in range(length)]
+        self.Whs = [self.model.add_parameters((4*hidden_size,hidden_size)) for _ in range(length)]
+        self.bs = [self.model.add_parameters(4*hidden_size) for _ in range(length)]
+        self.initial_c = self.model.add_parameters(hidden_size)
+        self.initial_h = self.model.add_parameters(hidden_size)
+
+    def set_dropout(self, dropout):
+        self.dropout = dropout
+
+    def disable_dropout(self):
+        self.dropout = 0.0
+
+    def transduce(self, inputs):
+        assert len(inputs) == self.length
+
+        batch_size = inputs[0].dim()[1]
+
+        dropout_retain = 1 - self.dropout
+        dropout_mask_x = dy.random_bernoulli(self.in_size, dropout_retain, 1/dropout_retain, batch_size)
+        dropout_mask_h = dy.random_bernoulli(self.hidden_size, dropout_retain, 1/dropout_retain, batch_size)
+
+        c_init = dy.parameter(self.initial_c)
+        c_tm1 = dy.concatenate_to_batch([c_init for _ in range(batch_size)])
+        h_init = dy.parameter(self.initial_h)
+        h_tm1 = dy.concatenate_to_batch([h_init for _ in range(batch_size)])
+
+        outputs = []
+
+        for i, x in enumerate(inputs):
+            gates = dy.vanilla_lstm_gates_dropout_concat([x], h_tm1,
+                    dy.parameter(self.Wxs[i]), dy.parameter(self.Whs[i]), dy.parameter(self.bs[i]),
+                    dropout_mask_x, dropout_mask_h)
+
+            c = dy.vanilla_lstm_c(c_tm1, gates)
+            h = dy.vanilla_lstm_h(c, gates)
+            outputs.append(h)
+
+            c_tm1 = c
+            h_tm1 = h
+
+        return outputs
+
+class BidirectionalUntiedLSTM(object):
+    def __init__(self, model, in_size, hidden_size, n_layers, length, dropout=0.0):
+        self.model = model.add_subcollection("Bidirectional")
+
+        self.layers = []
+        for i in range(n_layers):
+            f = UntiedLSTMLayer(self.model, in_size if i == 0 else 2*hidden_size, hidden_size, length, dropout)
+            b = UntiedLSTMLayer(self.model, in_size if i == 0 else 2*hidden_size, hidden_size, length, dropout)
+            self.layers.append((f,b))
+
+    def set_dropout(self, dropout):
+        for f,b in self.layers:
+            f.set_dropout(dropout)
+            b.set_dropout(dropout)
+
+    def disable_dropout(self):
+        for f,b in self.layers:
+            f.disable_dropout()
+            b.disable_dropout()
+
+    def transduce(self, inputs):
+        f,b = self.layers[0]
+        fh = f.transduce(inputs)
+        bh = reversed(b.transduce(inputs[::-1]))
+        h = [dy.concatenate([a,b]) for a,b in zip(fh, bh)]
+
+        for i in range(1,len(self.layers)):
+            f,b = self.layers[i]
+            fh = f.transduce(h)
+            bh = reversed(b.transduce(h[::-1]))
+            h = [dy.concatenate([a,b]) for a,b in zip(fh, bh)]
+
+        return h
+
 class ParserBase(object):
     def __init__(
             self,
@@ -158,6 +243,10 @@ class ParserBase(object):
             self.context_network = Feedforward(
                 self.model if random_lstm else self.trainable_parameters,
                 emb_dim*2*lstm_context_size, no_lstm_hidden_dims, 2*lstm_dim, dropout)
+        elif lstm_type == "untied-truncated":
+            self.lstm = BidirectionalUntiedLSTM(
+                self.model if random_lstm else self.trainable_parameters,
+                emb_dim, lstm_dim, lstm_layers, 2*lstm_context_size)
         else:
             self.lstm = dy.BiRNNBuilder(
                 lstm_layers,
@@ -220,7 +309,7 @@ class ParserBase(object):
 
         return span_encoding
 
-    def get_truncated_span_encoding(self, embeddings, distance, concat_bow, weight_bow):
+    def get_truncated_span_encoding(self, embeddings, distance, concat_bow, weight_bow, untied=False):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
         for i in range(distance*2):
@@ -229,7 +318,10 @@ class ParserBase(object):
             batched_embeddings.append(catted)
         assert batched_embeddings[0].dim()[1] == len(embeddings)-1 # batch dimension is length of sentence + 1
 
-        lstm_outputs = self.transduce_lstm_batch(batched_embeddings)
+        if untied:
+            lstm_outputs = self.lstm.transduce(batched_embeddings)
+        else:
+            lstm_outputs = self.transduce_lstm_batch(batched_embeddings)
 
         forward_reps = lstm_outputs[distance-1][:self.lstm_dim]
         backward_reps = lstm_outputs[distance][self.lstm_dim:]
@@ -375,8 +467,8 @@ class ParserBase(object):
 
         embeddings = self.get_embeddings(sentence, is_train)
 
-        if self.lstm_type == 'truncated':
-            span_encoding = self.get_truncated_span_encoding(embeddings, self.lstm_context_size, self.concat_bow, self.weight_bow)
+        if self.lstm_type == 'truncated' or self.lstm_type == 'untied-truncated':
+            span_encoding = self.get_truncated_span_encoding(embeddings, self.lstm_context_size, self.concat_bow, self.weight_bow, self.lstm_type == 'untied-truncated')
         elif self.lstm_type == 'no-lstm':
             span_encoding = self.get_truncated_no_lstm_span_encoding(embeddings, self.lstm_context_size)
         elif self.lstm_type == 'shuffled':
