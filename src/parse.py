@@ -480,7 +480,7 @@ class ParserBase(object):
 
         return span_encoding
 
-    def lstm_derivative(self, sentence, position):
+    def lstm_derivative(self, sentence, position, index):
         self.lstm.disable_dropout()
         embeddings = self.get_embeddings(sentence, is_train=False)
         lstm_outputs = self.lstm.transduce(embeddings)
@@ -488,10 +488,10 @@ class ParserBase(object):
         forward = lstm_outputs[position][:self.lstm_dim]
         backward = lstm_outputs[position + 1][self.lstm_dim:]
         c = dy.concatenate([forward, backward])
-        s = dy.sum_elems(c)
+        s = c[index]
         s.backward()
-        avg_gradients = [np.abs(embed.gradient()).mean() for embed in embeddings]
-        return avg_gradients
+        gradients = [embed.gradient() for embed in embeddings]
+        return gradients
 
 class TopDownParser(ParserBase):
     def __init__(

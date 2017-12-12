@@ -3,6 +3,7 @@ import itertools
 import os.path
 import time
 from collections import defaultdict
+import random
 
 import dynet as dy
 import numpy as np
@@ -307,10 +308,11 @@ def predict_labels(args):
     print("Loading model from {}...".format(args.model_path_base))
     model = dy.ParameterCollection()
     [base_parser] = dy.load(args.model_path_base, model)
-    parser = parse.LabelPrediction(model, base_parser, args.label_hidden_dim)
-    trainer = dy.AdamTrainer(parser.f_label.model)
 
     for self_not_parent in [False, True]:
+        parser = parse.LabelPrediction(model, base_parser, args.label_hidden_dim)
+        trainer = dy.AdamTrainer(parser.f_label.model)
+
         print('predicting own label' if self_not_parent else 'predicting parent label')
         for epoch_index in range(10):
             np.random.shuffle(train_parse)
@@ -331,7 +333,7 @@ def predict_labels(args):
             for tree in dev_parse:
                 dy.renew_cg()
                 sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
-                _, c, t = parser.predict_parent_label_for_spans(sentence, tree)
+                _, c, t = parser.predict_parent_label_for_spans(sentence, tree, self_not_parent)
                 correct += c
                 total += t
             print("dev score at epoch", epoch_index+1, ":", correct/total)
@@ -348,24 +350,32 @@ def derivative_analysis(args):
     model = dy.ParameterCollection()
     [parser] = dy.load(args.model_path_base, model)
 
-    total_grad = np.zeros(500)
+    total_l1_grad = np.zeros(500)
+    total_l2_grad = np.zeros(500)
     total_count = np.zeros(500)
     for tree in dev_parse:
         sentence = [(leaf.tag, leaf.word) for leaf in tree.leaves()]
         for position in range(len(sentence)+1):
+            index = random.randrange(parser.lstm_dim*2)
             dy.renew_cg()
-            gradients = np.array(parser.lstm_derivative(sentence, position))
-            gradients /= gradients.max()
+            gradients = parser.lstm_derivative(sentence, position, index)
             buckets = list(reversed(range(position+1))) + list(range(len(sentence)-position+1))
+            assert len(buckets) == len(gradients)
             for position, grad in zip(buckets, gradients):
-                total_grad[position] += grad
+                total_l1_grad[position] += np.linalg.norm(grad, ord=1)
+                total_l2_grad[position] += np.linalg.norm(grad, ord=2)
                 total_count[position] += 1
 
+    print('l1:')
     for i in range(500):
         if total_count[i] == 0:
             break
-        print(total_grad[i]/total_count[i])
-
+        print(total_l1_grad[i]/total_count[i])
+    print('l2:')
+    for i in range(500):
+        if total_count[i] == 0:
+            break
+        print(total_l2_grad[i]/total_count[i])
 
 def main():
     dynet_args = [
