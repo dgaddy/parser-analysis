@@ -239,14 +239,18 @@ class ParserBase(object):
                 self.trainable_parameters,
                 dy.VanillaLSTMBuilder)
 
+        if lstm_type in ["truncated", "untied-truncated", "no-lstm"]:
+            self.indexed_starts = [self.trainable_parameters.add_parameters(emb_dim) for _ in range(300)]
+            self.indexed_stops = [self.trainable_parameters.add_parameters(emb_dim) for _ in range(300)]
+
         if lstm_type == "no-lstm":
             self.context_network = Feedforward(
                 self.model if random_lstm else self.trainable_parameters,
-                emb_dim*2*lstm_context_size, no_lstm_hidden_dims, 2*lstm_dim, dropout)
+                emb_dim*2*(lstm_context_size+1), no_lstm_hidden_dims, 2*lstm_dim, dropout)
         elif lstm_type == "untied-truncated":
             self.lstm = BidirectionalUntiedLSTM(
                 self.model if random_lstm else self.trainable_parameters,
-                emb_dim, lstm_dim, lstm_layers, 2*lstm_context_size)
+                emb_dim, lstm_dim, lstm_layers, 2*(lstm_context_size+1))
         else:
             self.lstm = dy.BiRNNBuilder(
                 lstm_layers,
@@ -312,10 +316,14 @@ class ParserBase(object):
     def get_truncated_span_encoding(self, embeddings, distance, concat_bow, weight_bow, untied=False):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
+        batched_embeddings.append(dy.concatenate_to_batch([dy.parameter(p) for p in
+                    self.indexed_starts[:len(embeddings)-1]]))
         for i in range(distance*2):
             selected = padded_embeddings[i:len(padded_embeddings)-(distance*2)+i+1]
             catted = dy.concatenate_to_batch(selected)
             batched_embeddings.append(catted)
+        batched_embeddings.append(dy.concatenate_to_batch([dy.parameter(p) for p in
+                    self.indexed_stops[:len(embeddings)-1]]))
         assert batched_embeddings[0].dim()[1] == len(embeddings)-1 # batch dimension is length of sentence + 1
 
         if untied:
@@ -356,10 +364,14 @@ class ParserBase(object):
     def get_truncated_no_lstm_span_encoding(self, embeddings, distance):
         padded_embeddings = [embeddings[0]]*(distance-1)+embeddings+[embeddings[-1]]*(distance-1)
         batched_embeddings = []
+        batched_embeddings.append(dy.concatenate_to_batch([dy.parameter(p) for p in
+                    self.indexed_starts[:len(embeddings)-1]]))
         for i in range(distance*2):
             selected = padded_embeddings[i:len(padded_embeddings)-(distance*2)+i+1]
             catted = dy.concatenate_to_batch(selected)
             batched_embeddings.append(catted)
+        batched_embeddings.append(dy.concatenate_to_batch([dy.parameter(p) for p in
+                    self.indexed_stops[:len(embeddings)-1]]))
         assert batched_embeddings[0].dim()[1] == len(embeddings)-1 # batch dimension is length of sentence + 1
 
         context_outputs = self.context_network(dy.concatenate(batched_embeddings))
