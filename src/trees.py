@@ -203,9 +203,20 @@ class SpanList(object):
                     n_crossing += 1
         return n_crossing == 0
 
-def load_trees(path, strip_top=True):
+def load_trees(path, strip_top=True, strip_spmrl_features=True):
     with open(path) as infile:
-        tokens = infile.read().replace("(", " ( ").replace(")", " ) ").split()
+        treebank = infile.read()
+
+    # Features bounded by `##` may contain spaces, so if we strip the features
+    # we need to do so prior to tokenization
+    if strip_spmrl_features:
+        treebank = "".join(treebank.split("##")[::2])
+
+    tokens = treebank.replace("(", " ( ").replace(")", " ) ").split()
+
+    # XXX(nikita): this should really be passed as an argument
+    if 'Hebrew' in path or 'Hungarian' in path or 'Arabic' in path:
+        strip_top = False
 
     def helper(index):
         trees = []
@@ -237,9 +248,17 @@ def load_trees(path, strip_top=True):
     trees, index = helper(0)
     assert index == len(tokens)
 
+    # XXX(nikita): this behavior should really be controlled by an argument
+    if 'German' in path:
+        # Utterances where the root is a terminal symbol break our parser's
+        # assumptions, so insert a dummy root node.
+        for i, tree in enumerate(trees):
+            if isinstance(tree, LeafTreebankNode):
+                trees[i] = InternalTreebankNode("VROOT", [tree])
+
     if strip_top:
         for i, tree in enumerate(trees):
-            if tree.label == "TOP":
+            if tree.label in ("TOP", "ROOT"):
                 assert len(tree.children) == 1
                 trees[i] = tree.children[0]
 

@@ -448,7 +448,7 @@ class ParserBase(object):
                 if is_common_word:
                     chars = [COMMON_WORD]
                 char_lstm_outputs = self.char_lstm.transduce([
-                    self.char_embeddings[self.char_vocab.index(char)]
+                    self.char_embeddings[self.char_vocab.index_or_unk(char, UNK)]
                     for char in [START] + chars + [STOP]])
                 char_encoding = dy.concatenate([
                     char_lstm_outputs[-1][:self.char_lstm_dim],

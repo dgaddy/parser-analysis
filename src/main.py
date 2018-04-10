@@ -52,6 +52,7 @@ def run_train(args):
     char_vocab.index(parse.START)
     char_vocab.index(parse.STOP)
     char_vocab.index(parse.COMMON_WORD)
+    char_vocab.index(parse.UNK)
 
     word_vocab = vocabulary.Vocabulary()
     word_vocab.index(parse.START)
@@ -169,7 +170,9 @@ def run_train(args):
                     tree_count += 1
             print("Percentage of valid trees:", tree_count/len(dev_predicted))
 
-        dev_fscore = evaluate.bracket_f1(dev_treebank, dev_predicted)
+            dev_fscore = evaluate.bracket_f1(dev_treebank, dev_predicted)
+        else:
+            dev_fscore = evaluate.evalb(args.evalb_dir, dev_treebank, dev_predicted)
 
         print(
             "dev-fscore {} "
@@ -263,7 +266,11 @@ def run_test(args):
         predicted, _ = parser.parse(sentence)
         test_predicted.append(predicted.convert())
 
-    test_fscore = evaluate.bracket_f1(test_treebank, test_predicted)
+    if type(parser) == parse.IndependentParser:
+        print('Warning: not using evalb for evaluation')
+        test_fscore = evaluate.bracket_f1(test_treebank, test_predicted)
+    else:
+        test_fscore = evaluate.evalb(args.evalb_dir, test_treebank, test_predicted)
 
     print(
         "test-fscore {} "
