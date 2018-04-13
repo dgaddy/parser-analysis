@@ -21,6 +21,7 @@ The dev score will be appended to the model file name in the form `_dev=xx.xx`, 
 The following table describes the command line arguments to run each experiment in the paper:
 
 Paper section | Arguments
+--- | ---
 3.1 | Run `python3 src/main.py train-label --model-path-base models/base-model_dev=xx.xx`.
 3.2 | Use the base model command with `--parser-type independent` instead of `chart`.
 4.1 | Add the option `--embedding-type` with combinations of the characters w, t, and c for word, tag, and character (e.g. `--embedding-type wt`).  For character only, we recommend using `--char-lstm-dim 250` as well.
